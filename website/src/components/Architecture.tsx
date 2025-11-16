@@ -3,7 +3,7 @@ import { motion } from 'framer-motion';
 const Architecture = () => {
   return (
     <section id="architecture" className="py-20 md:py-32">
-      <div class="container">
+      <div className="container">
         <div className="section-header">
           <h2 className="section-title">Engineered for Performance</h2>
           <p className="section-subtitle">Rust-powered core with modular architecture</p>
