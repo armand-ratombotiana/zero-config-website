@@ -87,6 +87,14 @@ impl Engine {
         self.orchestrator.restart_all().await
     }
 
+    pub async fn get_container_stats(&self, service: &str) -> Result<bollard::container::Stats> {
+        self.orchestrator.get_container_stats(service).await
+    }
+
+    pub async fn get_all_stats(&self) -> Result<Vec<(String, bollard::container::Stats)>> {
+        self.orchestrator.get_all_stats().await
+    }
+
     fn allocate_ports(&mut self) -> Result<()> {
         let mut port = 5000;
 

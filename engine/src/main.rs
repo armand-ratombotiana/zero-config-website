@@ -5,6 +5,8 @@ mod orchestrator;
 mod runtime;
 mod services;
 mod secrets;
+mod generators;
+mod cloud;
 
 use anyhow::{Context, Result};
 use cli::{Cli, Commands, CloudCommands, GenerateCommands};
@@ -284,20 +286,34 @@ async fn cmd_logs(service: Option<String>, follow: bool, tail: usize) -> Result<
 async fn cmd_cloud(action: CloudCommands) -> Result<()> {
     match action {
         CloudCommands::Start { provider } => {
-            println!("Starting {} cloud emulation...", provider);
-            // TODO: Implement cloud start
+            println!("{}", format!("☁️  Starting {} cloud emulation...", provider).cyan().bold());
+
+            let emulator = cloud::CloudEmulator::new(provider.clone()).await?;
+            emulator.start().await?;
+
+            println!("{}", format!("✅ {} emulation started successfully", provider).green());
+            println!("\n{}", cloud::localstack::get_aws_config_snippet());
         }
         CloudCommands::Stop => {
-            println!("Stopping cloud emulation...");
-            // TODO: Implement cloud stop
+            println!("{}", "☁️  Stopping cloud emulation...".cyan().bold());
+
+            // Try to stop LocalStack (default provider)
+            let emulator = cloud::CloudEmulator::new("localstack".to_string()).await?;
+            emulator.stop().await?;
+
+            println!("{}", "✅ Cloud emulation stopped".green());
         }
         CloudCommands::Status => {
-            println!("Cloud emulation status:");
-            // TODO: Implement cloud status
+            println!("{}", "☁️  Cloud emulation status:".cyan().bold());
+
+            let emulator = cloud::CloudEmulator::new("localstack".to_string()).await?;
+            emulator.status().await?;
         }
         CloudCommands::Ui => {
-            println!("Opening cloud UI...");
-            // TODO: Implement cloud UI
+            println!("{}", "☁️  Opening cloud UI...".cyan().bold());
+
+            let emulator = cloud::CloudEmulator::new("localstack".to_string()).await?;
+            emulator.ui().await?;
         }
     }
     Ok(())
@@ -347,9 +363,104 @@ async fn cmd_exec(service: String, command: Vec<String>) -> Result<()> {
 }
 
 async fn cmd_monitor(interval: u64) -> Result<()> {
-    println!("Monitoring resources (interval: {}s)...", interval);
-    // TODO: Implement resource monitoring
-    Ok(())
+    let config = match ZeroConfig::discover()? {
+        Some(cfg) => cfg,
+        None => {
+            println!("{}", "Error: No zero.yml found".red());
+            return Ok(());
+        }
+    };
+
+    let project_name = config.metadata.name
+        .clone()
+        .unwrap_or_else(|| "zeroconfig-project".to_string());
+
+    println!("{}", format!("📊 Monitoring resources (interval: {}s)", interval).cyan().bold());
+    println!("{}", "Press Ctrl+C to stop".yellow());
+    println!();
+
+    let engine = Engine::new(project_name, config).await?;
+
+    loop {
+        match engine.get_all_stats().await {
+            Ok(stats) => {
+                // Clear screen (platform independent)
+                print!("\x1B[2J\x1B[1;1H");
+
+                println!("{}", "📊 Container Resource Usage".cyan().bold());
+                println!("{}", "─".repeat(80));
+                println!("{:25} {:>12} {:>12} {:>12} {:>12}",
+                    "SERVICE", "CPU %", "MEMORY", "NET I/O", "BLOCK I/O");
+                println!("{}", "─".repeat(80));
+
+                for (service_name, stat) in stats {
+                    let cpu_percent = calculate_cpu_percent(&stat);
+                    let memory_usage = format_bytes(stat.memory_stats.usage.unwrap_or(0));
+                    let net_rx = format_bytes(
+                        stat.networks.as_ref()
+                            .and_then(|n| n.values().next())
+                            .map(|n| n.rx_bytes)
+                            .unwrap_or(0)
+                    );
+                    let net_tx = format_bytes(
+                        stat.networks.as_ref()
+                            .and_then(|n| n.values().next())
+                            .map(|n| n.tx_bytes)
+                            .unwrap_or(0)
+                    );
+                    let block_read = format_bytes(
+                        stat.blkio_stats.io_service_bytes_recursive.as_ref()
+                            .and_then(|io| io.first())
+                            .map(|io| io.value)
+                            .unwrap_or(0)
+                    );
+
+                    println!("{:25} {:>11.2}% {:>12} {:>12} {:>12}",
+                        service_name.green(),
+                        cpu_percent,
+                        memory_usage,
+                        format!("{}/{}", net_rx, net_tx),
+                        block_read
+                    );
+                }
+
+                println!("{}", "─".repeat(80));
+                println!("\n{}", format!("Updated: {}", chrono::Local::now().format("%Y-%m-%d %H:%M:%S")).dimmed());
+            },
+            Err(e) => {
+                println!("{}", format!("Error fetching stats: {}", e).red());
+            }
+        }
+
+        tokio::time::sleep(tokio::time::Duration::from_secs(interval)).await;
+    }
+}
+
+fn calculate_cpu_percent(stats: &bollard::container::Stats) -> f64 {
+    let cpu_delta = stats.cpu_stats.cpu_usage.total_usage as f64
+        - stats.precpu_stats.cpu_usage.total_usage as f64;
+    let system_delta = stats.cpu_stats.system_cpu_usage.unwrap_or(0) as f64
+        - stats.precpu_stats.system_cpu_usage.unwrap_or(0) as f64;
+
+    if system_delta > 0.0 && cpu_delta > 0.0 {
+        let num_cpus = stats.cpu_stats.online_cpus.unwrap_or(1) as f64;
+        (cpu_delta / system_delta) * num_cpus * 100.0
+    } else {
+        0.0
+    }
+}
+
+fn format_bytes(bytes: u64) -> String {
+    const UNITS: &[&str] = &["B", "KB", "MB", "GB", "TB"];
+    let mut size = bytes as f64;
+    let mut unit_index = 0;
+
+    while size >= 1024.0 && unit_index < UNITS.len() - 1 {
+        size /= 1024.0;
+        unit_index += 1;
+    }
+
+    format!("{:.2} {}", size, UNITS[unit_index])
 }
 
 async fn cmd_ps() -> Result<()> {
@@ -414,34 +525,82 @@ async fn cmd_restart(services: Vec<String>) -> Result<()> {
 }
 
 async fn cmd_env(format: String) -> Result<()> {
-    println!("Environment variables (format: {}):", format);
-    // TODO: Implement env export
+    let config = match ZeroConfig::discover()? {
+        Some(cfg) => cfg,
+        None => {
+            println!("{}", "Error: No zero.yml found".red());
+            return Ok(());
+        }
+    };
+
+    println!("{}", format!("🔐 Environment variables (format: {})", format).cyan().bold());
+
+    let mut env_manager = secrets::EnvManager::new();
+    env_manager.process_env_vars(&config.env);
+
+    match format.as_str() {
+        "shell" | "bash" => {
+            println!("{}", env_manager.export_shell());
+        }
+        "dotenv" | "env" => {
+            println!("{}", env_manager.export_dotenv());
+        }
+        "json" => {
+            let json = env_manager.export_json()?;
+            println!("{}", json);
+        }
+        "yaml" | "yml" => {
+            let yaml = env_manager.export_yaml()?;
+            println!("{}", yaml);
+        }
+        _ => {
+            println!("{}", "Unknown format. Supported: shell, dotenv, json, yaml".yellow());
+            println!("\nAvailable formats:");
+            println!("  shell   - Export statements (export KEY=value)");
+            println!("  dotenv  - .env file format (KEY=value)");
+            println!("  json    - JSON object");
+            println!("  yaml    - YAML format");
+        }
+    }
+
     Ok(())
 }
 
 async fn cmd_generate(target: GenerateCommands) -> Result<()> {
+    let config = match ZeroConfig::discover()? {
+        Some(cfg) => cfg,
+        None => {
+            println!("{}", "Error: No zero.yml found".red());
+            return Ok(());
+        }
+    };
+
+    let output_dir = std::env::current_dir()?;
+
     match target {
         GenerateCommands::Dockerfile => {
-            println!("Generating Dockerfile...");
-            // TODO: Implement Dockerfile generation
+            println!("{}", "📄 Generating Dockerfile...".cyan().bold());
+            generators::dockerfile::generate(&config, &output_dir)?;
         }
         GenerateCommands::Compose => {
-            println!("Generating docker-compose.yml...");
-            // TODO: Implement compose file generation
+            println!("{}", "📄 Generating docker-compose.yml...".cyan().bold());
+            generators::compose::generate(&config, &output_dir)?;
         }
         GenerateCommands::Env => {
-            println!("Generating .env file...");
-            // TODO: Implement env file generation
+            println!("{}", "📄 Generating .env file...".cyan().bold());
+            generators::envfile::generate(&config, &output_dir)?;
         }
         GenerateCommands::GithubActions => {
-            println!("Generating GitHub Actions workflow...");
-            // TODO: Implement workflow generation
+            println!("{}", "📄 Generating GitHub Actions workflow...".cyan().bold());
+            generators::github_actions::generate(&config, &output_dir)?;
         }
         GenerateCommands::All => {
-            println!("Generating all configuration files...");
-            // TODO: Implement all generation
+            println!("{}", "📄 Generating all configuration files...".cyan().bold());
+            generators::generate_all(&config, &output_dir)?;
         }
     }
+
+    println!("{}", "✅ Generation complete!".green().bold());
     Ok(())
 }
 

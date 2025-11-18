@@ -436,4 +436,42 @@ impl ContainerOrchestrator {
 
         Ok(())
     }
+
+    /// Get container stats for monitoring
+    pub async fn get_container_stats(&self, service_name: &str) -> Result<bollard::container::Stats> {
+        let container_id = self.get_container_id(service_name).await?;
+
+        let mut stats_stream = self.docker.stats(&container_id, Some(bollard::container::StatsOptions {
+            stream: false,
+            one_shot: true,
+        }));
+
+        if let Some(stats_result) = stats_stream.next().await {
+            return Ok(stats_result?);
+        }
+
+        anyhow::bail!("Failed to get stats for service '{}'", service_name)
+    }
+
+    /// Get stats for all project containers
+    pub async fn get_all_stats(&self) -> Result<Vec<(String, bollard::container::Stats)>> {
+        let containers = self.list_containers().await?;
+        let mut stats = Vec::new();
+
+        for container in containers {
+            if let Some(names) = container.names {
+                if let Some(name) = names.first() {
+                    let service_name = name.trim_start_matches('/');
+                    if service_name.starts_with(&self.project_name) {
+                        match self.get_container_stats(service_name).await {
+                            Ok(stat) => stats.push((service_name.to_string(), stat)),
+                            Err(e) => warn!("Failed to get stats for {}: {}", service_name, e),
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(stats)
+    }
 }
