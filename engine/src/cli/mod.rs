@@ -122,6 +122,39 @@ pub enum Commands {
         #[command(subcommand)]
         target: GenerateCommands,
     },
+
+    /// Check health of running services
+    Health {
+        /// Specific service to check (optional)
+        service: Option<String>,
+
+        /// Wait for service to become healthy
+        #[arg(short, long)]
+        wait: bool,
+
+        /// Timeout in seconds when waiting
+        #[arg(short, long, default_value = "60")]
+        timeout: u64,
+    },
+
+    /// Backup database services
+    Backup {
+        /// Service to backup
+        service: String,
+
+        /// Output directory for backup
+        #[arg(short, long, default_value = "./backups")]
+        output: String,
+    },
+
+    /// Restore database services
+    Restore {
+        /// Service to restore
+        service: String,
+
+        /// Backup file to restore from
+        file: String,
+    },
 }
 
 #[derive(Subcommand)]

@@ -7,6 +7,7 @@ mod services;
 mod secrets;
 mod generators;
 mod cloud;
+mod health;
 
 use anyhow::{Context, Result};
 use cli::{Cli, Commands, CloudCommands, GenerateCommands};
@@ -83,6 +84,15 @@ async fn run() -> Result<()> {
         }
         Commands::Generate { target } => {
             cmd_generate(target).await?;
+        }
+        Commands::Health { service, wait, timeout } => {
+            cmd_health(service, wait, timeout).await?;
+        }
+        Commands::Backup { service, output } => {
+            cmd_backup(service, output).await?;
+        }
+        Commands::Restore { service, file } => {
+            cmd_restore(service, file).await?;
         }
     }
 
@@ -613,4 +623,202 @@ fn generate_template(template: Option<&str>) -> String {
         Some("fullstack") => include_str!("../templates/fullstack.yml"),
         _ => include_str!("../templates/default.yml"),
     }.to_string()
+}
+
+async fn cmd_health(service: Option<String>, wait: bool, timeout: u64) -> Result<()> {
+    let config = match ZeroConfig::discover()? {
+        Some(cfg) => cfg,
+        None => {
+            println!("{}", "Error: No zero.yml found".red());
+            return Ok(());
+        }
+    };
+
+    let project_name = config.metadata.name
+        .clone()
+        .unwrap_or_else(|| "zeroconfig-project".to_string());
+
+    println!("{}", "💚 Health Check".cyan().bold());
+    println!("{}", "─".repeat(80));
+
+    let engine = Engine::new(project_name.clone(), config).await?;
+    let health_checker = health::HealthChecker::new().await?;
+
+    if let Some(service_name) = service {
+        // Check specific service
+        let containers = engine.list_services().await?;
+
+        for container in containers {
+            if let Some(names) = container.names {
+                for name in names {
+                    let container_name = name.trim_start_matches('/');
+                    if container_name.contains(&service_name) {
+                        let container_id = container.id.as_deref().unwrap_or("");
+
+                        if wait {
+                            println!("Waiting for {} to become healthy (timeout: {}s)...", service_name, timeout);
+                            match health_checker.wait_for_healthy(
+                                container_id,
+                                &service_name,
+                                std::time::Duration::from_secs(timeout),
+                            ).await {
+                                Ok(status) => {
+                                    println!("{}", health::format_health_status(&status));
+                                    println!("{}", "✅ Service is healthy!".green().bold());
+                                }
+                                Err(e) => {
+                                    println!("{}", format!("❌ Health check failed: {}", e).red().bold());
+                                    return Ok(());
+                                }
+                            }
+                        } else {
+                            let status = health_checker.check_container(container_id, &service_name).await?;
+                            println!("{}", health::format_health_status(&status));
+                        }
+
+                        return Ok(());
+                    }
+                }
+            }
+        }
+
+        println!("{}", format!("Service '{}' not found", service_name).yellow());
+    } else {
+        // Check all services
+        let containers = engine.list_services().await?;
+
+        for container in containers {
+            if let Some(names) = container.names {
+                if let Some(name) = names.first() {
+                    let container_name = name.trim_start_matches('/');
+                    if container_name.starts_with(&project_name) {
+                        let container_id = container.id.as_deref().unwrap_or("");
+                        let status = health_checker.check_container(container_id, container_name).await?;
+                        println!("{}", health::format_health_status(&status));
+                    }
+                }
+            }
+        }
+
+        println!("{}", "─".repeat(80));
+    }
+
+    Ok(())
+}
+
+async fn cmd_backup(service: String, output: String) -> Result<()> {
+    println!("{}", format!("💾 Backing up service: {}", service).cyan().bold());
+
+    let config = match ZeroConfig::discover()? {
+        Some(cfg) => cfg,
+        None => {
+            println!("{}", "Error: No zero.yml found".red());
+            return Ok(());
+        }
+    };
+
+    let project_name = config.metadata.name
+        .clone()
+        .unwrap_or_else(|| "zeroconfig-project".to_string());
+
+    let engine = Engine::new(project_name, config).await?;
+
+    // Create backup directory
+    std::fs::create_dir_all(&output)?;
+
+    let timestamp = chrono::Local::now().format("%Y%m%d_%H%M%S");
+    let backup_file = format!("{}/{}_{}.sql", output, service, timestamp);
+
+    // Execute backup command based on service type
+    let backup_command = if service.contains("postgres") {
+        vec![
+            "pg_dump".to_string(),
+            "-U".to_string(),
+            "postgres".to_string(),
+            "-d".to_string(),
+            "postgres".to_string(),
+        ]
+    } else if service.contains("mysql") {
+        vec![
+            "mysqldump".to_string(),
+            "-u".to_string(),
+            "root".to_string(),
+            "--all-databases".to_string(),
+        ]
+    } else if service.contains("mongo") {
+        vec![
+            "mongodump".to_string(),
+            "--archive".to_string(),
+        ]
+    } else {
+        println!("{}", format!("Backup not supported for service type: {}", service).yellow());
+        return Ok(());
+    };
+
+    println!("Executing backup command...");
+    engine.exec_command(&service, backup_command).await?;
+
+    println!("{}", format!("✅ Backup saved to: {}", backup_file).green());
+    println!("\nTo restore this backup, run:");
+    println!("  {}", format!("zero restore {} --file {}", service, backup_file).cyan());
+
+    Ok(())
+}
+
+async fn cmd_restore(service: String, file: String) -> Result<()> {
+    println!("{}", format!("♻️  Restoring service: {}", service).cyan().bold());
+    println!("{}", format!("From file: {}", file).dimmed());
+
+    if !std::path::Path::new(&file).exists() {
+        println!("{}", format!("Error: Backup file not found: {}", file).red());
+        return Ok(());
+    }
+
+    let config = match ZeroConfig::discover()? {
+        Some(cfg) => cfg,
+        None => {
+            println!("{}", "Error: No zero.yml found".red());
+            return Ok(());
+        }
+    };
+
+    let project_name = config.metadata.name
+        .clone()
+        .unwrap_or_else(|| "zeroconfig-project".to_string());
+
+    let engine = Engine::new(project_name, config).await?;
+
+    // Execute restore command based on service type
+    let restore_command = if service.contains("postgres") {
+        vec![
+            "psql".to_string(),
+            "-U".to_string(),
+            "postgres".to_string(),
+            "-f".to_string(),
+            file,
+        ]
+    } else if service.contains("mysql") {
+        vec![
+            "mysql".to_string(),
+            "-u".to_string(),
+            "root".to_string(),
+            format!("< {}", file),
+        ]
+    } else if service.contains("mongo") {
+        vec![
+            "mongorestore".to_string(),
+            "--archive={}".to_string(),
+            file,
+        ]
+    } else {
+        println!("{}", format!("Restore not supported for service type: {}", service).yellow());
+        return Ok(());
+    };
+
+    println!("Executing restore command...");
+    engine.exec_command(&service, restore_command).await?;
+
+    println!("{}", "✅ Restore completed successfully".green());
+
+    Ok(())
 }
