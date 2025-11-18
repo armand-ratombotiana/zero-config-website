@@ -1,0 +1,60 @@
+metadata:
+  name: fullstack-app
+  description: Full-stack application with multiple services
+  version: 1.0.0
+
+languages:
+  node: "20"
+  python: "3.11"
+
+services:
+  # Database
+  postgres:
+    version: "16"
+    port: auto
+    environment:
+      POSTGRES_DB: fullstackapp
+      POSTGRES_USER: appuser
+      POSTGRES_PASSWORD: devpassword
+    volumes:
+      - ./data/postgres:/var/lib/postgresql/data
+
+  # Cache
+  redis:
+    version: "latest"
+    port: auto
+
+  # NoSQL Database
+  mongodb:
+    version: "7"
+    port: auto
+    environment:
+      MONGO_INITDB_DATABASE: fullstackapp
+
+  # Message Queue
+  rabbitmq:
+    version: "3-management"
+    port: auto
+    environment:
+      RABBITMQ_DEFAULT_USER: admin
+      RABBITMQ_DEFAULT_PASS: admin
+
+cloud:
+  localstack: full
+
+env:
+  NODE_ENV: development
+  PYTHON_ENV: development
+  DATABASE_URL: auto-generate
+  REDIS_URL: auto-generate
+  MONGODB_URL: auto-generate
+  RABBITMQ_URL: auto-generate
+  SECRET_KEY: auto-generate
+  JWT_SECRET: auto-generate
+
+ports: auto
+
+startup:
+  - npm install
+  - pip install -r requirements.txt
+  - npm run dev

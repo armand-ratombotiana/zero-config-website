@@ -1,0 +1,29 @@
+metadata:
+  name: go-app
+  description: Go application
+  version: 1.0.0
+
+languages:
+  go: "1.23"
+
+services:
+  postgres:
+    version: "16"
+    port: auto
+    environment:
+      POSTGRES_DB: goapp
+
+  redis:
+    version: "latest"
+    port: auto
+
+env:
+  GO_ENV: development
+  DATABASE_URL: auto-generate
+  REDIS_URL: auto-generate
+
+ports: auto
+
+startup:
+  - go mod download
+  - go run main.go

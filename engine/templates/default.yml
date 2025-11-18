@@ -1,0 +1,22 @@
+metadata:
+  name: my-project
+  description: Default ZeroConfig project
+  version: 1.0.0
+
+languages:
+  node: "20"
+
+services:
+  postgres:
+    version: "16"
+    port: auto
+
+env:
+  MODE: development
+  DATABASE_URL: auto-generate
+
+ports: auto
+
+startup:
+  - npm install
+  - npm run dev

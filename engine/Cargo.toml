@@ -1,0 +1,73 @@
+[package]
+name = "zeroconfig"
+version = "0.1.0"
+edition = "2021"
+authors = ["ZeroConfig Team"]
+description = "Universal Developer Environment Automation Engine with Rust Core"
+license = "MIT"
+repository = "https://github.com/zeroconfig/zeroconfig-engine"
+
+[dependencies]
+# CLI and Command Line Interface
+clap = { version = "4.5", features = ["derive", "cargo"] }
+colored = "2.1"
+
+# Async Runtime
+tokio = { version = "1.40", features = ["full"] }
+async-trait = "0.1"
+
+# Serialization and Config Parsing
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+serde_yaml = "0.9"
+toml = "0.8"
+
+# Docker and Container Management
+bollard = "0.17"
+futures = "0.3"
+
+# Logging and Tracing
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+env_logger = "0.11"
+
+# Error Handling
+anyhow = "1.0"
+thiserror = "1.0"
+
+# File System and Path Handling
+walkdir = "2.5"
+glob = "0.3"
+
+# HTTP Server for Web UI
+axum = "0.7"
+tower = "0.5"
+tower-http = { version = "0.5", features = ["fs", "cors"] }
+
+# Process Management
+sysinfo = "0.31"
+
+# Port Management
+portpicker = "0.1"
+
+# UUID Generation
+uuid = { version = "1.10", features = ["v4", "serde"] }
+
+# Time and Date
+chrono = { version = "0.4", features = ["serde"] }
+
+# Secret Generation
+rand = "0.8"
+sha2 = "0.10"
+hex = "0.4"
+base64 = "0.22"
+
+# Plugin System
+libloading = "0.8"
+
+# Environment Variables
+dotenv = "0.15"
+
+[dev-dependencies]
+mockall = "0.13"
+tempfile = "3.12"

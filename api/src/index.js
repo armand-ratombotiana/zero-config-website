@@ -94,3 +94,4 @@ app.listen(PORT, () => {
   console.log(`📝 Environment: ${process.env.NODE_ENV}`);
   console.log(`🔗 Client URL: ${process.env.CLIENT_URL}`);
 });
+

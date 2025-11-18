@@ -1,0 +1,29 @@
+metadata:
+  name: rust-app
+  description: Rust application
+  version: 1.0.0
+
+languages:
+  rust: stable
+
+services:
+  postgres:
+    version: "16"
+    port: auto
+    environment:
+      POSTGRES_DB: rustapp
+
+  redis:
+    version: "latest"
+    port: auto
+
+env:
+  RUST_LOG: info
+  DATABASE_URL: auto-generate
+  REDIS_URL: auto-generate
+
+ports: auto
+
+startup:
+  - cargo build
+  - cargo run

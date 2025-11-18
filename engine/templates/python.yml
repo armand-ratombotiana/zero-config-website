@@ -1,0 +1,30 @@
+metadata:
+  name: python-app
+  description: Python application
+  version: 1.0.0
+
+languages:
+  python: "3.11"
+
+services:
+  postgres:
+    version: "16"
+    port: auto
+    environment:
+      POSTGRES_DB: pythonapp
+
+  redis:
+    version: "latest"
+    port: auto
+
+env:
+  PYTHONPATH: .
+  ENVIRONMENT: development
+  DATABASE_URL: auto-generate
+  REDIS_URL: auto-generate
+
+ports: auto
+
+startup:
+  - pip install -r requirements.txt
+  - python main.py
