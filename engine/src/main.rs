@@ -302,26 +302,41 @@ async fn cmd_cloud(action: CloudCommands) -> Result<()> {
             emulator.start().await?;
 
             println!("{}", format!("✅ {} emulation started successfully", provider).green());
-            println!("\n{}", cloud::localstack::get_aws_config_snippet());
+
+            // Show provider-specific configuration
+            match provider.as_str() {
+                "localstack" | "aws" => println!("\n{}", cloud::localstack::get_aws_config_snippet()),
+                "azure" | "azurite" => println!("\n{}", cloud::azurite::get_azure_config_snippet()),
+                "gcp" | "google" => println!("\n{}", cloud::gcp::get_gcp_config_snippet()),
+                _ => {}
+            }
         }
         CloudCommands::Stop => {
             println!("{}", "☁️  Stopping cloud emulation...".cyan().bold());
 
-            // Try to stop LocalStack (default provider)
-            let emulator = cloud::CloudEmulator::new("localstack".to_string()).await?;
-            emulator.stop().await?;
+            // Stop all known emulators
+            for provider in &["localstack", "azurite", "gcp"] {
+                let emulator = cloud::CloudEmulator::new(provider.to_string()).await?;
+                let _ = emulator.stop().await;
+            }
 
             println!("{}", "✅ Cloud emulation stopped".green());
         }
         CloudCommands::Status => {
             println!("{}", "☁️  Cloud emulation status:".cyan().bold());
+            println!();
 
-            let emulator = cloud::CloudEmulator::new("localstack".to_string()).await?;
-            emulator.status().await?;
+            // Check status of all emulators
+            for provider in &["localstack", "azurite", "gcp"] {
+                let emulator = cloud::CloudEmulator::new(provider.to_string()).await?;
+                let _ = emulator.status().await;
+                println!();
+            }
         }
         CloudCommands::Ui => {
             println!("{}", "☁️  Opening cloud UI...".cyan().bold());
 
+            // Default to LocalStack, but can be extended
             let emulator = cloud::CloudEmulator::new("localstack".to_string()).await?;
             emulator.ui().await?;
         }
