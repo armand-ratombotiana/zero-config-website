@@ -55,14 +55,14 @@ pub struct ServiceConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum PortValue {
-    Auto,
+    Auto(String), // "auto" string
     Fixed(u16),
     Range(PortRange),
 }
 
 impl Default for PortValue {
     fn default() -> Self {
-        PortValue::Auto
+        PortValue::Auto("auto".to_string())
     }
 }
 
@@ -75,13 +75,13 @@ pub struct PortRange {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum PortConfig {
-    Auto,
+    Auto(String), // "auto" string
     Manual(HashMap<String, u16>),
 }
 
 impl Default for PortConfig {
     fn default() -> Self {
-        PortConfig::Auto
+        PortConfig::Auto("auto".to_string())
     }
 }
 

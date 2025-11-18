@@ -146,7 +146,7 @@ impl ContainerOrchestrator {
             image: Some(image.clone()),
             env: Some(env_vars),
             host_config: Some(host_config),
-            cmd: config.command.as_ref().map(|c| vec![c.as_str()]),
+            cmd: config.command.as_ref().map(|c| vec![c.to_string()]),
             ..Default::default()
         };
 

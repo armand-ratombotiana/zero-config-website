@@ -117,9 +117,13 @@ async fn cmd_init(name: Option<String>, template: Option<String>) -> Result<()> 
 async fn cmd_up(build: bool, detach: bool) -> Result<()> {
     println!("{}", "🚀 Starting development environment...".cyan().bold());
 
-    let config = ZeroConfig::discover()
-        .context("Failed to discover zero.yml")?
-        .context("No zero.yml found in current directory or parents")?;
+    let config = match ZeroConfig::discover()? {
+        Some(cfg) => cfg,
+        None => {
+            println!("{}", "Error: No zero.yml found in current directory or parents".red());
+            return Ok(());
+        }
+    };
 
     config.validate()?;
 
@@ -152,9 +156,13 @@ async fn cmd_up(build: bool, detach: bool) -> Result<()> {
 async fn cmd_down(volumes: bool) -> Result<()> {
     println!("{}", "🛑 Stopping development environment...".yellow().bold());
 
-    let config = ZeroConfig::discover()
-        .context("Failed to discover zero.yml")?
-        .context("No zero.yml found")?;
+    let config = match ZeroConfig::discover()? {
+        Some(cfg) => cfg,
+        None => {
+            println!("{}", "Error: No zero.yml found".red());
+            return Ok(());
+        }
+    };
 
     let project_name = config.metadata.name
         .clone()
@@ -171,9 +179,13 @@ async fn cmd_down(volumes: bool) -> Result<()> {
 async fn cmd_build_env() -> Result<()> {
     println!("{}", "🔨 Building environment...".cyan().bold());
 
-    let config = ZeroConfig::discover()
-        .context("No zero.yml found")?
-        .context("No zero.yml found")?;
+    let config = match ZeroConfig::discover()? {
+        Some(cfg) => cfg,
+        None => {
+            println!("{}", "Error: No zero.yml found".red());
+            return Ok(());
+        }
+    };
 
     config.validate()?;
 
@@ -193,9 +205,13 @@ async fn cmd_doctor() -> Result<()> {
     println!("{}", "🩺 Running system diagnostics...".cyan().bold());
     println!();
 
-    let config = ZeroConfig::discover()
-        .context("No zero.yml found")?
-        .context("No zero.yml found")?;
+    let config = match ZeroConfig::discover()? {
+        Some(cfg) => cfg,
+        None => {
+            println!("{}", "No zero.yml found in current directory or parents".yellow());
+            return Ok(());
+        }
+    };
 
     // Check Docker
     println!("Checking Docker...");
@@ -284,9 +300,13 @@ async fn cmd_monitor(interval: u64) -> Result<()> {
 async fn cmd_ps() -> Result<()> {
     println!("{}", "📦 Running services:".cyan().bold());
 
-    let config = ZeroConfig::discover()
-        .context("No zero.yml found")?
-        .context("No zero.yml found")?;
+    let config = match ZeroConfig::discover()? {
+        Some(cfg) => cfg,
+        None => {
+            println!("No configuration found");
+            return Ok(());
+        }
+    };
 
     let project_name = config.metadata.name
         .clone()

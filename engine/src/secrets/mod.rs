@@ -30,9 +30,10 @@ impl SecretGenerator {
 
     /// Generate a base64-encoded random string
     pub fn generate_base64(length: usize) -> String {
+        use base64::{Engine as _, engine::general_purpose};
         let mut rng = rand::thread_rng();
         let bytes: Vec<u8> = (0..length).map(|_| rng.gen()).collect();
-        base64::encode(&bytes)
+        general_purpose::STANDARD.encode(&bytes)
     }
 
     /// Generate a JWT secret (64 characters)
