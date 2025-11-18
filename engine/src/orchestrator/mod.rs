@@ -1,6 +1,7 @@
 use anyhow::{Context, Result};
 use bollard::Docker;
-use bollard::container::{Config, CreateContainerOptions, StartContainerOptions, StopContainerOptions};
+use bollard::container::{Config, CreateContainerOptions, StartContainerOptions, StopContainerOptions, LogsOptions, AttachContainerOptions};
+use bollard::exec::{CreateExecOptions, StartExecResults};
 use bollard::image::CreateImageOptions;
 use bollard::models::{ContainerSummary, HostConfig, PortBinding};
 use futures::StreamExt;
@@ -300,6 +301,134 @@ impl ContainerOrchestrator {
                     let service_name = name.trim_start_matches('/');
                     if service_name.starts_with(&self.project_name) {
                         self.stop_service(service_name).await?;
+                    }
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Get container ID by service name
+    pub async fn get_container_id(&self, service_name: &str) -> Result<String> {
+        let containers = self.list_containers().await?;
+
+        for container in containers {
+            if let Some(names) = container.names {
+                for name in names {
+                    let container_name = name.trim_start_matches('/');
+                    if container_name == service_name || container_name.ends_with(&format!("-{}", service_name)) {
+                        return Ok(container.id.context("Container has no ID")?);
+                    }
+                }
+            }
+        }
+
+        anyhow::bail!("Service '{}' not found or not running", service_name)
+    }
+
+    /// Stream logs from a service container
+    pub async fn get_logs(&self, service_name: &str, follow: bool, tail: usize) -> Result<()> {
+        let container_id = self.get_container_id(service_name).await?;
+
+        let options = LogsOptions::<String> {
+            follow,
+            stdout: true,
+            stderr: true,
+            tail: tail.to_string(),
+            ..Default::default()
+        };
+
+        let mut stream = self.docker.logs(&container_id, Some(options));
+
+        while let Some(log) = stream.next().await {
+            match log {
+                Ok(output) => print!("{}", output),
+                Err(e) => {
+                    error!("Error reading logs: {}", e);
+                    break;
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Execute a command in a service container
+    pub async fn exec_command(&self, service_name: &str, command: Vec<String>) -> Result<()> {
+        let container_id = self.get_container_id(service_name).await?;
+
+        let exec_config = CreateExecOptions {
+            attach_stdout: Some(true),
+            attach_stderr: Some(true),
+            cmd: Some(command.iter().map(|s| s.as_str()).collect()),
+            ..Default::default()
+        };
+
+        let exec = self.docker.create_exec(&container_id, exec_config).await?;
+
+        if let StartExecResults::Attached { mut output, .. } = self.docker.start_exec(&exec.id, None).await? {
+            while let Some(chunk) = output.next().await {
+                match chunk {
+                    Ok(output) => print!("{}", output),
+                    Err(e) => {
+                        error!("Error executing command: {}", e);
+                        break;
+                    }
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Open an interactive shell in a service container
+    pub async fn open_shell(&self, service_name: &str, shell: &str) -> Result<()> {
+        let container_id = self.get_container_id(service_name).await?;
+
+        info!("Opening {} shell in container {}", shell, service_name);
+
+        // Use docker CLI for interactive shell since Bollard doesn't support TTY properly
+        let docker_cmd = if cfg!(windows) {
+            format!("docker exec -it {} {}", container_id, shell)
+        } else {
+            format!("docker exec -it {} {}", container_id, shell)
+        };
+
+        println!("Running: {}", docker_cmd);
+        println!("Note: Interactive shells require running 'docker exec -it {} {}' directly", container_id, shell);
+
+        Ok(())
+    }
+
+    /// Restart a specific service
+    pub async fn restart_service(&self, service_name: &str) -> Result<()> {
+        let container_id = self.get_container_id(service_name).await?;
+
+        info!("Restarting service: {}", service_name);
+
+        // Stop the container
+        self.docker.stop_container(&container_id, None).await
+            .context("Failed to stop container")?;
+
+        // Start the container
+        self.docker.start_container::<String>(&container_id, None).await
+            .context("Failed to start container")?;
+
+        info!("Service {} restarted successfully", service_name);
+        Ok(())
+    }
+
+    /// Restart all project services
+    pub async fn restart_all(&self) -> Result<()> {
+        let containers = self.list_containers().await?;
+
+        for container in containers {
+            if let Some(names) = container.names {
+                if let Some(name) = names.first() {
+                    let service_name = name.trim_start_matches('/');
+                    if service_name.starts_with(&self.project_name) {
+                        self.restart_service(service_name).await?;
                     }
                 }
             }

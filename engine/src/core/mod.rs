@@ -67,6 +67,26 @@ impl Engine {
         self.orchestrator.list_containers().await
     }
 
+    pub async fn get_logs(&self, service: &str, follow: bool, tail: usize) -> Result<()> {
+        self.orchestrator.get_logs(service, follow, tail).await
+    }
+
+    pub async fn exec_command(&self, service: &str, command: Vec<String>) -> Result<()> {
+        self.orchestrator.exec_command(service, command).await
+    }
+
+    pub async fn open_shell(&self, service: &str, shell: &str) -> Result<()> {
+        self.orchestrator.open_shell(service, shell).await
+    }
+
+    pub async fn restart_service(&self, service: &str) -> Result<()> {
+        self.orchestrator.restart_service(service).await
+    }
+
+    pub async fn restart_all(&self) -> Result<()> {
+        self.orchestrator.restart_all().await
+    }
+
     fn allocate_ports(&mut self) -> Result<()> {
         let mut port = 5000;
 

@@ -252,8 +252,32 @@ async fn cmd_doctor() -> Result<()> {
 }
 
 async fn cmd_logs(service: Option<String>, follow: bool, tail: usize) -> Result<()> {
-    println!("Viewing logs... (service: {:?}, follow: {}, tail: {})", service, follow, tail);
-    // TODO: Implement log viewing
+    let service_name = match service {
+        Some(s) => s,
+        None => {
+            println!("{}", "Error: Service name is required".red());
+            println!("Usage: zero logs <service> [--follow] [--tail <lines>]");
+            return Ok(());
+        }
+    };
+
+    let config = match ZeroConfig::discover()? {
+        Some(cfg) => cfg,
+        None => {
+            println!("{}", "Error: No zero.yml found".red());
+            return Ok(());
+        }
+    };
+
+    let project_name = config.metadata.name
+        .clone()
+        .unwrap_or_else(|| "zeroconfig-project".to_string());
+
+    println!("{}", format!("📜 Viewing logs for service: {}", service_name).cyan().bold());
+
+    let engine = Engine::new(project_name, config).await?;
+    engine.get_logs(&service_name, follow, tail).await?;
+
     Ok(())
 }
 
@@ -280,14 +304,45 @@ async fn cmd_cloud(action: CloudCommands) -> Result<()> {
 }
 
 async fn cmd_shell(service: String, shell: String) -> Result<()> {
-    println!("Opening {} shell in {}...", shell, service);
-    // TODO: Implement shell access
+    let config = match ZeroConfig::discover()? {
+        Some(cfg) => cfg,
+        None => {
+            println!("{}", "Error: No zero.yml found".red());
+            return Ok(());
+        }
+    };
+
+    let project_name = config.metadata.name
+        .clone()
+        .unwrap_or_else(|| "zeroconfig-project".to_string());
+
+    println!("{}", format!("🐚 Opening {} shell in service: {}", shell, service).cyan().bold());
+
+    let engine = Engine::new(project_name, config).await?;
+    engine.open_shell(&service, &shell).await?;
+
     Ok(())
 }
 
 async fn cmd_exec(service: String, command: Vec<String>) -> Result<()> {
-    println!("Executing in {}: {:?}", service, command);
-    // TODO: Implement command execution
+    let config = match ZeroConfig::discover()? {
+        Some(cfg) => cfg,
+        None => {
+            println!("{}", "Error: No zero.yml found".red());
+            return Ok(());
+        }
+    };
+
+    let project_name = config.metadata.name
+        .clone()
+        .unwrap_or_else(|| "zeroconfig-project".to_string());
+
+    println!("{}", format!("⚡ Executing command in service: {}", service).cyan().bold());
+    println!("Command: {}", command.join(" "));
+
+    let engine = Engine::new(project_name, config).await?;
+    engine.exec_command(&service, command).await?;
+
     Ok(())
 }
 
@@ -329,12 +384,32 @@ async fn cmd_ps() -> Result<()> {
 }
 
 async fn cmd_restart(services: Vec<String>) -> Result<()> {
+    let config = match ZeroConfig::discover()? {
+        Some(cfg) => cfg,
+        None => {
+            println!("{}", "Error: No zero.yml found".red());
+            return Ok(());
+        }
+    };
+
+    let project_name = config.metadata.name
+        .clone()
+        .unwrap_or_else(|| "zeroconfig-project".to_string());
+
+    let engine = Engine::new(project_name, config).await?;
+
     if services.is_empty() {
-        println!("Restarting all services...");
+        println!("{}", "🔄 Restarting all services...".cyan().bold());
+        engine.restart_all().await?;
+        println!("{}", "✅ All services restarted successfully".green());
     } else {
-        println!("Restarting services: {:?}", services);
+        println!("{}", format!("🔄 Restarting services: {}", services.join(", ")).cyan().bold());
+        for service in services {
+            engine.restart_service(&service).await?;
+            println!("{}", format!("✅ Service {} restarted", service).green());
+        }
     }
-    // TODO: Implement restart
+
     Ok(())
 }
 
