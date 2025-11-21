@@ -70,18 +70,46 @@ fn get_zeroconfig_exe() -> Result<PathBuf, String> {
 
 // ZeroConfig CLI Commands
 #[tauri::command]
-async fn init_project(project_path: String) -> Result<String, String> {
+async fn init_project(project_path: String, template: Option<String>) -> Result<String, String> {
+    // Normalize path separators
+    let normalized_path = project_path.replace("\\", "/");
+    let path = std::path::Path::new(&normalized_path);
+
+    // Create the project directory if it doesn't exist
+    if !path.exists() {
+        std::fs::create_dir_all(&path)
+            .map_err(|e| format!("Failed to create project directory: {}", e))?;
+    }
+
     let exe_path = get_zeroconfig_exe()?;
+
+    // Build command with optional template
+    let mut args = vec!["init".to_string()];
+    if let Some(tpl) = template {
+        args.push("--template".to_string());
+        args.push(tpl);
+    }
+
     let output = Command::new(&exe_path)
-        .args(&["init"])
-        .current_dir(&project_path)
+        .args(&args)
+        .current_dir(&normalized_path)
         .output()
         .map_err(|e| format!("Failed to execute zeroconfig at {:?}: {}", exe_path, e))?;
 
     if output.status.success() {
-        Ok(String::from_utf8_lossy(&output.stdout).to_string())
+        let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+        Ok(if stdout.trim().is_empty() {
+            format!("Project initialized successfully at {}", normalized_path)
+        } else {
+            stdout
+        })
     } else {
-        Err(String::from_utf8_lossy(&output.stderr).to_string())
+        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+        Err(if stderr.trim().is_empty() {
+            "Failed to initialize project".to_string()
+        } else {
+            stderr
+        })
     }
 }
 

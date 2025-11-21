@@ -761,6 +761,9 @@ fn generate_template(template: Option<&str>) -> String {
         Some("rust") => include_str!("../templates/rust.yml"),
         Some("go") => include_str!("../templates/go.yml"),
         Some("fullstack") => include_str!("../templates/fullstack.yml"),
+        Some("database") => include_str!("../templates/database.yml"),
+        Some("redis") => include_str!("../templates/redis.yml"),
+        Some("microservices") => include_str!("../templates/microservices.yml"),
         _ => include_str!("../templates/default.yml"),
     }.to_string()
 }

@@ -1,0 +1,15 @@
+metadata:
+  name: redis-project
+  description: Project with Redis cache
+  version: 1.0.0
+
+services:
+  redis:
+    version: "latest"
+    port: auto
+
+env:
+  MODE: development
+  REDIS_URL: auto-generate
+
+ports: auto

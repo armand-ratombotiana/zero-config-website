@@ -1,0 +1,21 @@
+metadata:
+  name: database-project
+  description: Project with PostgreSQL database
+  version: 1.0.0
+
+services:
+  postgres:
+    version: "16"
+    port: auto
+    environment:
+      POSTGRES_DB: myapp
+      POSTGRES_USER: zeroconfig
+      POSTGRES_PASSWORD: auto-generate
+    volumes:
+      - ./data/postgres:/var/lib/postgresql/data
+
+env:
+  MODE: development
+  DATABASE_URL: auto-generate
+
+ports: auto

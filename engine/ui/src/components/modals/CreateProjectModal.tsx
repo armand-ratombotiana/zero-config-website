@@ -93,7 +93,20 @@ export default function CreateProjectModal({ isOpen, onClose, onSuccess }: Creat
       const normalizedPath = projectPath.replace(/\\/g, '/');
       const fullPath = `${normalizedPath}/${projectName}`;
 
-      await invoke('init_project', { projectPath: fullPath });
+      // Map template to CLI template name
+      const templateMap: Record<Template, string | null> = {
+        blank: null,
+        database: 'database',
+        cache: 'redis',
+        fullstack: 'fullstack',
+        microservices: 'microservices',
+      };
+      const templateArg = templateMap[template];
+
+      await invoke('init_project', {
+        projectPath: fullPath,
+        template: templateArg
+      });
 
       // Pass the created project path back to parent
       onSuccess(fullPath);

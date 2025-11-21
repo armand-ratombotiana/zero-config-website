@@ -49,6 +49,18 @@ pub enum Commands {
         volumes: bool,
     },
 
+    /// Start a specific service
+    Start {
+        /// Service name to start
+        service: String,
+    },
+
+    /// Stop a specific service
+    Stop {
+        /// Service name to stop
+        service: String,
+    },
+
     /// Build the environment without starting
     BuildEnv,
 

@@ -1,0 +1,44 @@
+metadata:
+  name: microservices-project
+  description: Microservices architecture with multiple services
+  version: 1.0.0
+
+services:
+  # Database
+  postgres:
+    version: "16"
+    port: auto
+    environment:
+      POSTGRES_DB: microservices
+      POSTGRES_USER: zeroconfig
+      POSTGRES_PASSWORD: auto-generate
+    volumes:
+      - ./data/postgres:/var/lib/postgresql/data
+
+  # Cache
+  redis:
+    version: "latest"
+    port: auto
+
+  # Message Queue
+  rabbitmq:
+    version: "3-management"
+    port: auto
+    environment:
+      RABBITMQ_DEFAULT_USER: admin
+      RABBITMQ_DEFAULT_PASS: auto-generate
+
+  # Service Discovery (optional)
+  consul:
+    version: "latest"
+    port: auto
+
+env:
+  MODE: development
+  DATABASE_URL: auto-generate
+  REDIS_URL: auto-generate
+  RABBITMQ_URL: auto-generate
+  CONSUL_URL: auto-generate
+  SERVICE_NAME: auto-generate
+
+ports: auto
