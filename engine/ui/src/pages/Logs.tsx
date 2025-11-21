@@ -1,9 +1,11 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { Search, Download, Trash2, Play, Pause } from 'lucide-react';
+import { invoke } from '@tauri-apps/api/core';
 import { Service } from '../types';
 
 interface LogsProps {
   services: Service[];
+  projectPath?: string;
 }
 
 interface LogEntry {
@@ -13,50 +15,100 @@ interface LogEntry {
   message: string;
 }
 
-export function Logs({ services }: LogsProps) {
+export function Logs({ services, projectPath = '' }: LogsProps) {
   const [selectedService, setSelectedService] = useState<string>('all');
   const [searchTerm, setSearchTerm] = useState('');
   const [logLevel, setLogLevel] = useState<string>('all');
   const [autoScroll, setAutoScroll] = useState(true);
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const logsEndRef = useRef<HTMLDivElement>(null);
+  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  // Mock log data
+  // Parse log line into structured format
+  const parseLogLine = (line: string, serviceName: string): LogEntry | null => {
+    if (!line.trim()) return null;
+
+    // Try to detect log level from content
+    let level: 'info' | 'warn' | 'error' | 'debug' = 'info';
+    const lowerLine = line.toLowerCase();
+    if (lowerLine.includes('error') || lowerLine.includes('fatal') || lowerLine.includes('exception')) {
+      level = 'error';
+    } else if (lowerLine.includes('warn') || lowerLine.includes('warning')) {
+      level = 'warn';
+    } else if (lowerLine.includes('debug') || lowerLine.includes('trace')) {
+      level = 'debug';
+    }
+
+    // Try to extract timestamp from log line
+    const timestampMatch = line.match(/^(\d{4}-\d{2}-\d{2}[T\s]\d{2}:\d{2}:\d{2})/);
+    const timestamp = timestampMatch ? timestampMatch[1].replace('T', ' ') : new Date().toISOString().replace('T', ' ').slice(0, 19);
+
+    return {
+      timestamp,
+      service: serviceName,
+      level,
+      message: line.trim(),
+    };
+  };
+
+  // Fetch logs for a service
+  const fetchServiceLogs = useCallback(async (serviceName: string) => {
+    if (!projectPath) return [];
+
+    try {
+      const result = await invoke<string>('get_service_logs', {
+        projectPath,
+        serviceName,
+        tail: 100,
+      });
+
+      const lines = result.split('\n').filter(line => line.trim());
+      return lines
+        .map(line => parseLogLine(line, serviceName))
+        .filter((entry): entry is LogEntry => entry !== null);
+    } catch {
+      return [];
+    }
+  }, [projectPath]);
+
+  // Fetch all logs
+  const fetchAllLogs = useCallback(async () => {
+    if (!projectPath || services.length === 0) return;
+
+    try {
+      const servicesToFetch = selectedService === 'all'
+        ? services.map(s => s.name)
+        : [selectedService];
+
+      const allLogs: LogEntry[] = [];
+      for (const serviceName of servicesToFetch) {
+        const serviceLogs = await fetchServiceLogs(serviceName);
+        allLogs.push(...serviceLogs);
+      }
+
+      // Sort by timestamp
+      allLogs.sort((a, b) => a.timestamp.localeCompare(b.timestamp));
+      setLogs(allLogs);
+    } catch {
+      // Silently ignore errors during polling
+    }
+  }, [projectPath, services, selectedService, fetchServiceLogs]);
+
+  // Initial load and polling
   useEffect(() => {
-    const mockLogs: LogEntry[] = [
-      {
-        timestamp: '2025-11-19 00:42:15',
-        service: 'postgres',
-        level: 'info',
-        message: 'database system is ready to accept connections',
-      },
-      {
-        timestamp: '2025-11-19 00:42:16',
-        service: 'redis',
-        level: 'info',
-        message: 'Server initialized',
-      },
-      {
-        timestamp: '2025-11-19 00:42:17',
-        service: 'postgres',
-        level: 'info',
-        message: 'checkpoint starting: time',
-      },
-      {
-        timestamp: '2025-11-19 00:42:18',
-        service: 'redis',
-        level: 'info',
-        message: 'Ready to accept connections',
-      },
-      {
-        timestamp: '2025-11-19 00:42:20',
-        service: 'postgres',
-        level: 'warn',
-        message: 'could not receive data from client: Connection reset by peer',
-      },
-    ];
-    setLogs(mockLogs);
-  }, []);
+    fetchAllLogs();
+
+    // Set up polling when autoScroll is enabled
+    if (autoScroll && projectPath) {
+      intervalRef.current = setInterval(fetchAllLogs, 5000);
+    }
+
+    return () => {
+      if (intervalRef.current) {
+        clearInterval(intervalRef.current);
+      }
+    };
+  }, [fetchAllLogs, autoScroll, projectPath]);
 
   useEffect(() => {
     if (autoScroll) {

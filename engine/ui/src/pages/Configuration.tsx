@@ -1,15 +1,26 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { FileText, Download, Upload, Check, AlertCircle, Code, Eye, Wand2 } from 'lucide-react';
 import { tauriApi } from '../services/tauri';
 import { AVAILABLE_TEMPLATES } from '../types';
 
-export function Configuration() {
+interface ConfigurationProps {
+  projectPath?: string;
+}
+
+export function Configuration({ projectPath = '' }: ConfigurationProps) {
   const [activeTab, setActiveTab] = useState<'templates' | 'editor' | 'visual'>('templates');
   const [selectedTemplate, setSelectedTemplate] = useState<string>('');
   const [configContent, setConfigContent] = useState<string>('');
   const [isValidating, setIsValidating] = useState(false);
   const [validationMessage, setValidationMessage] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
   const [isSaving, setIsSaving] = useState(false);
+
+  // Auto-load config when project path changes
+  useEffect(() => {
+    if (projectPath) {
+      handleLoad();
+    }
+  }, [projectPath]);
 
   const handleTemplateSelect = async (templateName: string) => {
     try {
@@ -43,6 +54,11 @@ export function Configuration() {
   };
 
   const handleSave = async () => {
+    if (!projectPath) {
+      setValidationMessage({ type: 'error', message: 'No project selected. Please open a project first.' });
+      return;
+    }
+
     if (!configContent.trim()) {
       setValidationMessage({ type: 'error', message: 'Configuration is empty' });
       return;
@@ -54,9 +70,8 @@ export function Configuration() {
     try {
       // First validate
       await tauriApi.validateConfig(configContent);
-      
+
       // Then save
-      const projectPath = 'C:/Users/judic/OneDrive/Desktop/zero-config/test-project'; // TODO: Get from context
       const result = await tauriApi.saveConfig(projectPath, configContent);
       setValidationMessage({ type: 'success', message: result });
     } catch (error) {
@@ -67,13 +82,22 @@ export function Configuration() {
   };
 
   const handleLoad = async () => {
+    if (!projectPath) {
+      setValidationMessage({ type: 'error', message: 'No project selected. Please open a project first.' });
+      return;
+    }
+
     try {
-      const projectPath = 'C:/Users/judic/OneDrive/Desktop/zero-config/test-project'; // TODO: Get from context
       const content = await tauriApi.loadConfig(projectPath);
       setConfigContent(content);
+      setActiveTab('editor');
       setValidationMessage({ type: 'success', message: 'Configuration loaded successfully' });
     } catch (error) {
-      setValidationMessage({ type: 'error', message: `${error}` });
+      // Don't show error if no config exists yet - might be a new project
+      const errorStr = String(error);
+      if (!errorStr.includes('No such file') && !errorStr.includes('cannot find')) {
+        setValidationMessage({ type: 'error', message: `${error}` });
+      }
     }
   };
 

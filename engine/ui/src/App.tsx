@@ -270,8 +270,8 @@ function App() {
                     }
                   />
                   <Route path="/monitoring" element={<Monitoring services={services} />} />
-                  <Route path="/logs" element={<Logs services={services} />} />
-                  <Route path="/config" element={<Configuration />} />
+                  <Route path="/logs" element={<Logs services={services} projectPath={projectPath} />} />
+                  <Route path="/config" element={<Configuration projectPath={projectPath} />} />
                   <Route path="/settings" element={<Settings />} />
                 </Routes>
               </div>

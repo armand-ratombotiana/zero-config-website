@@ -248,16 +248,33 @@ async fn get_cloud_status(project_path: String, provider: String) -> Result<Stri
 
 #[tauri::command]
 async fn check_docker_status() -> Result<String, String> {
-    let exe_path = get_zeroconfig_exe()?;
-    let output = Command::new(&exe_path)
-        .args(&["doctor"])
-        .output()
-        .map_err(|e| format!("Failed to execute zeroconfig at {:?}: {}", exe_path, e))?;
+    // Check Docker directly
+    let output = Command::new("docker")
+        .args(&["version", "--format", "{{.Server.Version}}"])
+        .output();
 
-    if output.status.success() {
-        Ok(String::from_utf8_lossy(&output.stdout).to_string())
-    } else {
-        Err(String::from_utf8_lossy(&output.stderr).to_string())
+    match output {
+        Ok(o) if o.status.success() => {
+            let version = String::from_utf8_lossy(&o.stdout).trim().to_string();
+            Ok(version)
+        }
+        _ => Err("Docker not available".to_string()),
+    }
+}
+
+#[tauri::command]
+async fn check_podman_status() -> Result<String, String> {
+    // Check Podman directly
+    let output = Command::new("podman")
+        .args(&["version", "--format", "{{.Version}}"])
+        .output();
+
+    match output {
+        Ok(o) if o.status.success() => {
+            let version = String::from_utf8_lossy(&o.stdout).trim().to_string();
+            Ok(version)
+        }
+        _ => Err("Podman not available".to_string()),
     }
 }
 
@@ -404,6 +421,7 @@ pub fn run() {
             stop_cloud_emulator,
             get_cloud_status,
             check_docker_status,
+            check_podman_status,
             load_template,
             list_templates,
             save_config,
