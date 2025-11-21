@@ -1,4 +1,4 @@
-import { BrowserRouter, Routes, Route } from 'react-router-dom';
+import { BrowserRouter, Routes, Route, useLocation } from 'react-router-dom';
 import { useState, useEffect, useCallback } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { open } from '@tauri-apps/plugin-dialog';
@@ -13,28 +13,39 @@ import { Configuration } from './pages/Configuration';
 import { Settings } from './pages/Settings';
 import CreateProjectModal from './components/modals/CreateProjectModal';
 import { ToastContainer } from './components/notifications/ToastNotification';
+import { Breadcrumbs } from './components/navigation/Breadcrumbs';
+import { ProjectList, addRecentProject } from './components/projects/ProjectList';
 import { useToast } from './hooks/useToast';
 import { Service, ServiceStatus } from './types';
 import './styles.css';
 
 // Welcome screen for when no project is loaded
-function WelcomeScreen({ onNewProject, onOpenProject }: { onNewProject: () => void; onOpenProject: () => void }) {
+function WelcomeScreen({
+  onNewProject,
+  onOpenProject,
+  onSelectProject
+}: {
+  onNewProject: () => void;
+  onOpenProject: () => void;
+  onSelectProject: (path: string) => void;
+}) {
   return (
-    <div className="flex-1 flex items-center justify-center p-8">
-      <div className="text-center max-w-2xl">
-        <div className="mx-auto mb-8 flex h-24 w-24 items-center justify-center rounded-2xl bg-gradient-accent shadow-accent-lg">
-          <svg className="h-12 w-12 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+    <div className="flex-1 flex p-8 gap-8">
+      {/* Left: Welcome message and actions */}
+      <div className="flex-1 flex flex-col justify-center max-w-xl">
+        <div className="mb-8 flex h-20 w-20 items-center justify-center rounded-2xl bg-gradient-accent shadow-accent-lg">
+          <svg className="h-10 w-10 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M13 10V3L4 14h7v7l9-11h-7z" />
           </svg>
         </div>
-        <h1 className="text-4xl font-bold gradient-text mb-4">Welcome to ZeroConfig</h1>
+        <h1 className="text-4xl font-bold gradient-text mb-3">Welcome to ZeroConfig</h1>
         <p className="text-lg text-muted mb-8">
           Zero-configuration development environments. Create or open a project to get started.
         </p>
-        <div className="flex flex-col sm:flex-row gap-4 justify-center">
+        <div className="flex flex-col sm:flex-row gap-3">
           <button
             onClick={onNewProject}
-            className="btn btn-primary text-lg px-8 py-4"
+            className="btn btn-primary px-6 py-3"
           >
             <svg className="h-5 w-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
@@ -43,43 +54,50 @@ function WelcomeScreen({ onNewProject, onOpenProject }: { onNewProject: () => vo
           </button>
           <button
             onClick={onOpenProject}
-            className="btn btn-secondary text-lg px-8 py-4"
+            className="btn btn-secondary px-6 py-3"
           >
             <svg className="h-5 w-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
             </svg>
-            Open Existing Project
+            Open Project
           </button>
         </div>
-        <div className="mt-12 grid grid-cols-1 sm:grid-cols-3 gap-6">
-          <div className="glass-card p-6">
-            <div className="w-12 h-12 rounded-lg bg-success/20 flex items-center justify-center mb-4 mx-auto">
-              <svg className="h-6 w-6 text-success" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+
+        {/* Features */}
+        <div className="mt-10 grid grid-cols-3 gap-4">
+          <div className="text-center">
+            <div className="w-10 h-10 rounded-lg bg-success/20 flex items-center justify-center mb-2 mx-auto">
+              <svg className="h-5 w-5 text-success" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
               </svg>
             </div>
-            <h3 className="text-white font-semibold mb-2">Zero Setup</h3>
-            <p className="text-sm text-muted">Auto-detect languages, databases, and services</p>
+            <h3 className="text-white text-sm font-medium">Zero Setup</h3>
+            <p className="text-xs text-muted mt-1">Auto-detect stack</p>
           </div>
-          <div className="glass-card p-6">
-            <div className="w-12 h-12 rounded-lg bg-accent-purple/20 flex items-center justify-center mb-4 mx-auto">
-              <svg className="h-6 w-6 text-accent-purple" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <div className="text-center">
+            <div className="w-10 h-10 rounded-lg bg-accent-purple/20 flex items-center justify-center mb-2 mx-auto">
+              <svg className="h-5 w-5 text-accent-purple" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
               </svg>
             </div>
-            <h3 className="text-white font-semibold mb-2">Docker/Podman</h3>
-            <p className="text-sm text-muted">Works with your preferred container runtime</p>
+            <h3 className="text-white text-sm font-medium">Multi-Runtime</h3>
+            <p className="text-xs text-muted mt-1">Docker & Podman</p>
           </div>
-          <div className="glass-card p-6">
-            <div className="w-12 h-12 rounded-lg bg-warning/20 flex items-center justify-center mb-4 mx-auto">
-              <svg className="h-6 w-6 text-warning" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <div className="text-center">
+            <div className="w-10 h-10 rounded-lg bg-warning/20 flex items-center justify-center mb-2 mx-auto">
+              <svg className="h-5 w-5 text-warning" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 15a4 4 0 004 4h9a5 5 0 10-.1-9.999 5.002 5.002 0 10-9.78 2.096A4.001 4.001 0 003 15z" />
               </svg>
             </div>
-            <h3 className="text-white font-semibold mb-2">Cloud Emulators</h3>
-            <p className="text-sm text-muted">Local AWS, GCP, and Azure emulation</p>
+            <h3 className="text-white text-sm font-medium">Cloud Local</h3>
+            <p className="text-xs text-muted mt-1">AWS, GCP, Azure</p>
           </div>
         </div>
+      </div>
+
+      {/* Right: Recent Projects */}
+      <div className="w-96 glass-card p-6">
+        <ProjectList onSelectProject={onSelectProject} />
       </div>
     </div>
   );
@@ -178,16 +196,22 @@ function App() {
       });
 
       if (selected && typeof selected === 'string') {
-        setProjectPath(selected);
-        setProjectName(selected.split(/[\\/]/).pop() || selected);
-        localStorage.setItem('zeroconfig_last_project', selected);
-        toast.success(`Opened project: ${selected.split(/[\\/]/).pop()}`);
-        await loadServices(selected);
+        selectProject(selected);
       }
     } catch (err) {
       toast.error('Failed to open project directory');
       console.error(err);
     }
+  };
+
+  const selectProject = async (path: string) => {
+    const name = path.split(/[\\/]/).pop() || path;
+    setProjectPath(path);
+    setProjectName(name);
+    localStorage.setItem('zeroconfig_last_project', path);
+    addRecentProject({ path, name });
+    toast.success(`Opened project: ${name}`);
+    await loadServices(path);
   };
 
   const handleNewProject = () => {
@@ -196,9 +220,11 @@ function App() {
 
   const handleProjectCreated = (newProjectPath?: string) => {
     if (newProjectPath) {
+      const name = newProjectPath.split(/[\\/]/).pop() || newProjectPath;
       setProjectPath(newProjectPath);
-      setProjectName(newProjectPath.split(/[\\/]/).pop() || newProjectPath);
+      setProjectName(name);
       localStorage.setItem('zeroconfig_last_project', newProjectPath);
+      addRecentProject({ path: newProjectPath, name });
       loadServices(newProjectPath);
     }
     setIsCreateModalOpen(false);
@@ -213,11 +239,20 @@ function App() {
 
   // Show welcome screen if no project is loaded
   const showWelcome = !projectPath;
+  const runningServicesCount = services.filter(s => s.status === ServiceStatus.Running).length;
 
   return (
     <BrowserRouter>
       <div className="flex h-screen bg-gradient-primary">
-        <Sidebar />
+        <Sidebar
+          projectName={projectName}
+          projectPath={projectPath}
+          onSelectProject={selectProject}
+          onNewProject={handleNewProject}
+          onOpenProject={handleOpenProject}
+          servicesCount={services.length}
+          runningServicesCount={runningServicesCount}
+        />
         <div className="flex flex-1 flex-col overflow-hidden">
           <Header
             projectPath={projectPath}
@@ -230,9 +265,14 @@ function App() {
           />
           <main className="flex-1 overflow-y-auto">
             {showWelcome ? (
-              <WelcomeScreen onNewProject={handleNewProject} onOpenProject={handleOpenProject} />
+              <WelcomeScreen
+                onNewProject={handleNewProject}
+                onOpenProject={handleOpenProject}
+                onSelectProject={selectProject}
+              />
             ) : (
               <div className="p-6">
+                <Breadcrumbs projectName={projectName} />
                 <Routes>
                   <Route
                     path="/"
