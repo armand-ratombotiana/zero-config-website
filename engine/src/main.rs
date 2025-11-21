@@ -424,12 +424,27 @@ async fn cmd_cloud(action: CloudCommands) -> Result<()> {
             println!("{}", "☁️  Stopping cloud emulation...".cyan().bold());
 
             // Stop all known emulators
+            let mut stopped_count = 0;
             for provider in &["localstack", "azurite", "gcp"] {
-                let emulator = cloud::CloudEmulator::new(provider.to_string()).await?;
-                let _ = emulator.stop().await;
+                match cloud::CloudEmulator::new(provider.to_string()).await {
+                    Ok(emulator) => {
+                        match emulator.stop().await {
+                            Ok(_) => {
+                                stopped_count += 1;
+                                info!("Stopped {} emulator", provider);
+                            }
+                            Err(e) => warn!("Failed to stop {} emulator: {}", provider, e),
+                        }
+                    }
+                    Err(e) => warn!("Failed to create {} emulator: {}", provider, e),
+                }
             }
 
-            println!("{}", "✅ Cloud emulation stopped".green());
+            if stopped_count > 0 {
+                println!("{}", "✅ Cloud emulation stopped".green());
+            } else {
+                println!("{}", "⚠️  No cloud emulators were running".yellow());
+            }
         }
         CloudCommands::Status => {
             println!("{}", "☁️  Cloud emulation status:".cyan().bold());
