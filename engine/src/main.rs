@@ -8,13 +8,13 @@ mod secrets;
 mod generators;
 mod cloud;
 mod health;
+mod validation;
 
 use anyhow::{Context, Result};
 use cli::{Cli, Commands, CloudCommands, GenerateCommands};
 use colored::Colorize;
 use config::ZeroConfig;
 use core::Engine;
-use tracing::{error, info};
 use tracing_subscriber;
 
 #[tokio::main]
@@ -51,6 +51,12 @@ async fn run() -> Result<()> {
         }
         Commands::Down { volumes } => {
             cmd_down(volumes).await?;
+        }
+        Commands::Start { service } => {
+            cmd_start_service(service).await?;
+        }
+        Commands::Stop { service } => {
+            cmd_stop_service(service).await?;
         }
         Commands::BuildEnv => {
             cmd_build_env().await?;
@@ -188,6 +194,70 @@ async fn cmd_down(volumes: bool) -> Result<()> {
     Ok(())
 }
 
+async fn cmd_start_service(service: String) -> Result<()> {
+    println!("{} {}", "🚀 Starting service:".cyan().bold(), service.yellow());
+
+    let config = match ZeroConfig::discover()? {
+        Some(cfg) => cfg,
+        None => {
+            println!("{}", "Error: No zero.yml found in current directory or parents".red());
+            return Ok(());
+        }
+    };
+
+    // Validate service exists in config
+    if !config.services.contains_key(&service) {
+        println!("{} Service '{}' not found in configuration", "Error:".red(), service);
+        return Ok(());
+    }
+
+    config.validate()?;
+
+    let project_name = config.metadata.name
+        .clone()
+        .unwrap_or_else(|| "zeroconfig-project".to_string());
+
+    let mut engine = Engine::new(project_name, config).await?;
+
+    // Start only the specified service
+    engine.start_service(&service).await?;
+
+    println!("{} Service '{}' started successfully", "✅".green(), service);
+
+    Ok(())
+}
+
+async fn cmd_stop_service(service: String) -> Result<()> {
+    println!("{} {}", "🛑 Stopping service:".yellow().bold(), service.yellow());
+
+    let config = match ZeroConfig::discover()? {
+        Some(cfg) => cfg,
+        None => {
+            println!("{}", "Error: No zero.yml found in current directory or parents".red());
+            return Ok(());
+        }
+    };
+
+    // Validate service exists in config
+    if !config.services.contains_key(&service) {
+        println!("{} Service '{}' not found in configuration", "Error:".red(), service);
+        return Ok(());
+    }
+
+    let project_name = config.metadata.name
+        .clone()
+        .unwrap_or_else(|| "zeroconfig-project".to_string());
+
+    let engine = Engine::new(project_name, config).await?;
+
+    // Stop only the specified service
+    engine.stop_service(&service).await?;
+
+    println!("{} Service '{}' stopped successfully", "✅".green(), service);
+
+    Ok(())
+}
+
 async fn cmd_build_env() -> Result<()> {
     println!("{}", "🔨 Building environment...".cyan().bold());
 
@@ -225,25 +295,57 @@ async fn cmd_doctor() -> Result<()> {
         }
     };
 
-    // Check Docker
-    println!("Checking Docker...");
-    let mut runtime_mgr = runtime::RuntimeManager::new();
-    match runtime_mgr.check_docker().await {
-        Ok(true) => println!("  {} Docker is installed and running", "✓".green()),
-        Ok(false) => println!("  {} Docker is installed but not running", "✗".red()),
-        Err(e) => println!("  {} Docker check failed: {}", "✗".red(), e),
-    }
+    // Check container runtimes (Docker, Podman, etc.)
+    println!("Checking container runtimes...");
+    let mut container_mgr = runtime::ContainerRuntimeManager::new();
+    let container_runtime_ok = match container_mgr.detect_runtimes().await {
+        Ok(()) => {
+            let available = container_mgr.get_available_runtimes();
+            if available.is_empty() {
+                println!("  {} No container runtime found", "✗".red());
+                println!("    Install Docker: https://docs.docker.com/get-docker/");
+                println!("    Or Podman: https://podman.io/getting-started/installation");
+                false
+            } else {
+                let mut has_running = false;
+                for rt in available {
+                    let status = container_mgr.get_runtime_status(*rt).await;
+                    if status.is_ready() {
+                        let version = status.version.as_deref().unwrap_or("unknown");
+                        println!("  {} {} ({})", "✓".green(), rt.name(), version);
+                        has_running = true;
+                    } else if status.installed {
+                        println!("  {} {} (installed but not running)", "⚠".yellow(), rt.name());
+                    }
+                }
 
-    // Check runtimes
-    println!("\nChecking runtimes...");
+                // Show preferred runtime
+                if let Ok(preferred) = container_mgr.get_preferred_runtime() {
+                    println!("  {} Using {} as primary runtime", "→".cyan(), preferred.name());
+                }
+                has_running
+            }
+        }
+        Err(_) => {
+            println!("  {} No container runtime found", "✗".red());
+            println!("    Install Docker: https://docs.docker.com/get-docker/");
+            println!("    Or Podman: https://podman.io/getting-started/installation");
+            false
+        }
+    };
+
+    // Check language runtimes
+    println!("\nChecking language runtimes...");
+    let mut runtime_mgr = runtime::RuntimeManager::new();
     for (name, version) in config.get_runtimes() {
         match runtime_mgr.check_runtime(&name, &version).await {
             Ok(info) => {
                 if info.is_compatible {
-                    println!("  {} {} {}", "✓".green(), name, info.installed_version.unwrap());
+                    println!("  {} {} (v{})", "✓".green(), name, info.installed_version.as_deref().unwrap_or("unknown"));
                 } else {
-                    println!("  {} {} (required: {}, installed: {:?})",
-                        "✗".red(), name, version, info.installed_version);
+                    let installed_str = info.installed_version.as_deref().unwrap_or("not installed");
+                    println!("  {} {} (required: {}, installed: {})",
+                        "✗".red(), name, version, installed_str);
                     if let Some(cmd) = info.install_command {
                         println!("    Install: {}", cmd.yellow());
                     }
@@ -254,10 +356,17 @@ async fn cmd_doctor() -> Result<()> {
     }
 
     println!();
-    if runtime_mgr.all_compatible() {
+    let all_ok = container_runtime_ok && runtime_mgr.all_compatible();
+    if all_ok {
         println!("{}", "✅ All checks passed!".green().bold());
     } else {
         println!("{}", "⚠️  Some checks failed".yellow().bold());
+        if !container_runtime_ok {
+            println!("    - No container runtime available (Docker/Podman required)");
+        }
+        if !runtime_mgr.all_compatible() {
+            println!("    - Some language runtimes are missing or incompatible");
+        }
     }
 
     Ok(())
@@ -745,37 +854,43 @@ async fn cmd_backup(service: String, output: String) -> Result<()> {
     let backup_file = format!("{}/{}_{}.sql", output, service, timestamp);
 
     // Execute backup command based on service type
-    let backup_command = if service.contains("postgres") {
-        vec![
+    let (backup_command, file_extension) = if service.contains("postgres") {
+        (vec![
             "pg_dump".to_string(),
             "-U".to_string(),
             "postgres".to_string(),
             "-d".to_string(),
             "postgres".to_string(),
-        ]
+        ], "sql")
     } else if service.contains("mysql") {
-        vec![
+        (vec![
             "mysqldump".to_string(),
             "-u".to_string(),
             "root".to_string(),
             "--all-databases".to_string(),
-        ]
+        ], "sql")
     } else if service.contains("mongo") {
-        vec![
+        (vec![
             "mongodump".to_string(),
             "--archive".to_string(),
-        ]
+        ], "archive")
     } else {
         println!("{}", format!("Backup not supported for service type: {}", service).yellow());
         return Ok(());
     };
 
     println!("Executing backup command...");
-    engine.exec_command(&service, backup_command).await?;
+    
+    // Use exec_command_with_output to capture the backup data
+    let backup_data = engine.exec_command_with_output(&service, backup_command).await?;
+    
+    // Write backup data to file
+    let final_backup_file = format!("{}/{}_{}.{}", output, service, timestamp, file_extension);
+    std::fs::write(&final_backup_file, backup_data)?;
 
-    println!("{}", format!("✅ Backup saved to: {}", backup_file).green());
+    println!("{}", format!("✅ Backup saved to: {}", final_backup_file).green());
     println!("\nTo restore this backup, run:");
-    println!("  {}", format!("zero restore {} --file {}", service, backup_file).cyan());
+    println!("  {}", format!("zero restore {} --file {}", service, final_backup_file).cyan());
 
     Ok(())
 }
@@ -803,35 +918,51 @@ async fn cmd_restore(service: String, file: String) -> Result<()> {
 
     let engine = Engine::new(project_name, config).await?;
 
+    // Read backup file content
+    let backup_content = std::fs::read_to_string(&file)
+        .context(format!("Failed to read backup file: {}", file))?;
+
     // Execute restore command based on service type
-    let restore_command = if service.contains("postgres") {
-        vec![
-            "psql".to_string(),
-            "-U".to_string(),
-            "postgres".to_string(),
-            "-f".to_string(),
-            file,
-        ]
+    // We use base64 encoding to safely pass SQL content to the container
+    use base64::{Engine as Base64Engine, engine::general_purpose};
+    let encoded_content = general_purpose::STANDARD.encode(backup_content.as_bytes());
+
+    if service.contains("postgres") {
+        println!("Restoring PostgreSQL database...");
+
+        // Use base64 to safely pass SQL content
+        let restore_cmd = vec![
+            "sh".to_string(),
+            "-c".to_string(),
+            format!("echo '{}' | base64 -d | psql -U zeroconfig -d zeroconfig", encoded_content),
+        ];
+
+        engine.exec_command(&service, restore_cmd).await?;
     } else if service.contains("mysql") {
-        vec![
-            "mysql".to_string(),
-            "-u".to_string(),
-            "root".to_string(),
-            format!("< {}", file),
-        ]
+        println!("Restoring MySQL database...");
+
+        let restore_cmd = vec![
+            "sh".to_string(),
+            "-c".to_string(),
+            format!("echo '{}' | base64 -d | mysql -u root", encoded_content),
+        ];
+
+        engine.exec_command(&service, restore_cmd).await?;
     } else if service.contains("mongo") {
-        vec![
-            "mongorestore".to_string(),
-            "--archive={}".to_string(),
-            file,
-        ]
+        println!("Restoring MongoDB database...");
+
+        // For MongoDB, read the binary archive and use mongorestore
+        let restore_cmd = vec![
+            "sh".to_string(),
+            "-c".to_string(),
+            format!("echo '{}' | base64 -d | mongorestore --archive", encoded_content),
+        ];
+
+        engine.exec_command(&service, restore_cmd).await?;
     } else {
         println!("{}", format!("Restore not supported for service type: {}", service).yellow());
         return Ok(());
-    };
-
-    println!("Executing restore command...");
-    engine.exec_command(&service, restore_command).await?;
+    }
 
     println!("{}", "✅ Restore completed successfully".green());
 

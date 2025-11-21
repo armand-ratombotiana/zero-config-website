@@ -29,20 +29,16 @@ futures = "0.3"
 # Logging and Tracing
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-env_logger = "0.11"
 
 # Error Handling
 anyhow = "1.0"
 thiserror = "1.0"
 
 # File System and Path Handling
-walkdir = "2.5"
-glob = "0.3"
+# (Removed unused dependencies)
 
 # HTTP Server for Web UI
-axum = "0.7"
-tower = "0.5"
-tower-http = { version = "0.5", features = ["fs", "cors"] }
+# (Removed unused dependencies - CLI doesn't use web server)
 
 # Process Management
 sysinfo = "0.31"
@@ -63,10 +59,10 @@ hex = "0.4"
 base64 = "0.22"
 
 # Plugin System
-libloading = "0.8"
+# (Removed unused dependencies - plugin system not implemented)
 
 # Environment Variables
-dotenv = "0.15"
+# (Removed unused dependencies - not using dotenv crate)
 
 [dev-dependencies]
 mockall = "0.13"

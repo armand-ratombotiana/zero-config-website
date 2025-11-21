@@ -4,6 +4,9 @@ use tracing::{info, warn};
 
 pub mod detector;
 pub mod version_manager;
+pub mod container_runtime;
+
+pub use container_runtime::{ContainerRuntime, ContainerRuntimeManager, RuntimeStatus};
 
 /// Runtime information for a programming language/tool
 #[derive(Debug, Clone)]
@@ -68,6 +71,14 @@ impl RuntimeManager {
             "ruby" => vec!["ruby", "--version"],
             "php" => vec!["php", "--version"],
             "docker" => vec!["docker", "--version"],
+            "podman" => vec!["podman", "--version"],
+            "minikube" => vec!["minikube", "version"],
+            "kubectl" => vec!["kubectl", "version", "--client"],
+            "docker-compose" => vec!["docker-compose", "--version"],
+            "nerdctl" => vec!["nerdctl", "--version"],
+            "containerd" => vec!["ctr", "version"],
+            "crictl" => vec!["crictl", "--version"],
+            "colima" => vec!["colima", "version"],
             _ => return None,
         };
 
@@ -149,15 +160,22 @@ impl RuntimeManager {
     }
 
     /// Check if installed version is compatible with required version
-    fn is_version_compatible(&self, name: &str, installed: &str, required: &str) -> bool {
+    fn is_version_compatible(&self, _name: &str, installed: &str, required: &str) -> bool {
         // Handle special cases
         if required == "latest" || required == "stable" {
             return !installed.is_empty();
         }
 
-        // For major version matching (e.g., "20" matches "20.x.x")
-        if required.parse::<u32>().is_ok() {
-            return installed.starts_with(&format!("{}.", required));
+        // For major version matching (e.g., "20" matches "20.x.x" or newer)
+        if let Ok(required_major) = required.parse::<u32>() {
+            // Extract installed major version
+            if let Some(installed_major_str) = installed.split('.').next() {
+                if let Ok(installed_major) = installed_major_str.parse::<u32>() {
+                    // Compatible if installed major version is >= required
+                    return installed_major >= required_major;
+                }
+            }
+            return false;
         }
 
         // Exact or prefix match
@@ -181,7 +199,15 @@ impl RuntimeManager {
             "dotnet" => {
                 format!("Visit https://dotnet.microsoft.com/ or use: dotnet-install.sh --version {}", version)
             }
-            "docker" => "Visit https://docs.docker.com/get-docker/".to_string(),
+            "docker" => "Visit https://docs.docker.com/get-docker/ to install Docker Desktop".to_string(),
+            "podman" => "Visit https://podman.io/getting-started/installation to install Podman".to_string(),
+            "minikube" => "Visit https://minikube.sigs.k8s.io/docs/start/ to install Minikube".to_string(),
+            "kubectl" => "Visit https://kubernetes.io/docs/tasks/tools/ to install kubectl".to_string(),
+            "docker-compose" => "Visit https://docs.docker.com/compose/install/ to install Docker Compose".to_string(),
+            "nerdctl" => "Visit https://github.com/containerd/nerdctl to install nerdctl".to_string(),
+            "containerd" => "Visit https://containerd.io/downloads/ to install containerd".to_string(),
+            "crictl" => "Visit https://github.com/kubernetes-sigs/cri-tools to install crictl".to_string(),
+            "colima" => "Visit https://github.com/abiosoft/colima to install Colima (macOS/Linux)".to_string(),
             _ => format!("Please install {} version {}", name, version),
         }
     }
