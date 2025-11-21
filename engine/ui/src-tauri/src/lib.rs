@@ -246,36 +246,196 @@ async fn get_cloud_status(project_path: String, provider: String) -> Result<Stri
     }
 }
 
-#[tauri::command]
-async fn check_docker_status() -> Result<String, String> {
-    // Check Docker directly
-    let output = Command::new("docker")
-        .args(&["version", "--format", "{{.Server.Version}}"])
+/// Container runtime status information
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ContainerRuntimeStatus {
+    name: String,
+    installed: bool,
+    running: bool,
+    version: Option<String>,
+    is_preferred: bool,
+}
+
+/// Check a specific container runtime
+fn check_runtime(command: &str, version_args: &[&str], status_args: &[&str]) -> (bool, bool, Option<String>) {
+    // Check if installed
+    let version_output = Command::new(command)
+        .args(version_args)
         .output();
 
-    match output {
+    let (installed, version) = match version_output {
         Ok(o) if o.status.success() => {
-            let version = String::from_utf8_lossy(&o.stdout).trim().to_string();
-            Ok(version)
+            let ver = String::from_utf8_lossy(&o.stdout).trim().to_string();
+            // Extract version number from output
+            let clean_version = ver
+                .lines()
+                .next()
+                .unwrap_or(&ver)
+                .replace("Docker version ", "")
+                .replace("podman version ", "")
+                .split(',')
+                .next()
+                .unwrap_or(&ver)
+                .trim()
+                .to_string();
+            (true, Some(clean_version))
         }
-        _ => Err("Docker not available".to_string()),
+        _ => (false, None),
+    };
+
+    // Check if running
+    let running = if installed {
+        Command::new(command)
+            .args(status_args)
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false)
+    } else {
+        false
+    };
+
+    (installed, running, version)
+}
+
+#[tauri::command]
+async fn check_docker_status() -> Result<String, String> {
+    let (installed, running, version) = check_runtime(
+        "docker",
+        &["--version"],
+        &["ps"],
+    );
+
+    if running {
+        Ok(version.unwrap_or_else(|| "unknown".to_string()))
+    } else if installed {
+        Err("Docker is installed but not running".to_string())
+    } else {
+        Err("Docker not available".to_string())
     }
 }
 
 #[tauri::command]
 async fn check_podman_status() -> Result<String, String> {
-    // Check Podman directly
-    let output = Command::new("podman")
-        .args(&["version", "--format", "{{.Version}}"])
-        .output();
+    let (installed, running, version) = check_runtime(
+        "podman",
+        &["--version"],
+        &["ps"],
+    );
 
-    match output {
-        Ok(o) if o.status.success() => {
-            let version = String::from_utf8_lossy(&o.stdout).trim().to_string();
-            Ok(version)
-        }
-        _ => Err("Podman not available".to_string()),
+    if running {
+        Ok(version.unwrap_or_else(|| "unknown".to_string()))
+    } else if installed {
+        Err("Podman is installed but not running".to_string())
+    } else {
+        Err("Podman not available".to_string())
     }
+}
+
+#[tauri::command]
+async fn check_minikube_status() -> Result<String, String> {
+    let (installed, running, version) = check_runtime(
+        "minikube",
+        &["version", "--short"],
+        &["status"],
+    );
+
+    if running {
+        Ok(version.unwrap_or_else(|| "unknown".to_string()))
+    } else if installed {
+        Err("Minikube is installed but not running".to_string())
+    } else {
+        Err("Minikube not available".to_string())
+    }
+}
+
+#[tauri::command]
+async fn detect_all_runtimes() -> Result<Vec<ContainerRuntimeStatus>, String> {
+    let mut runtimes = Vec::new();
+    let mut found_preferred = false;
+
+    // Check Docker
+    let (docker_installed, docker_running, docker_version) = check_runtime(
+        "docker", &["--version"], &["ps"]
+    );
+    let docker_preferred = docker_running && !found_preferred;
+    if docker_preferred {
+        found_preferred = true;
+    }
+    runtimes.push(ContainerRuntimeStatus {
+        name: "Docker".to_string(),
+        installed: docker_installed,
+        running: docker_running,
+        version: docker_version,
+        is_preferred: docker_preferred,
+    });
+
+    // Check Podman
+    let (podman_installed, podman_running, podman_version) = check_runtime(
+        "podman", &["--version"], &["ps"]
+    );
+    let podman_preferred = podman_running && !found_preferred;
+    if podman_preferred {
+        found_preferred = true;
+    }
+    runtimes.push(ContainerRuntimeStatus {
+        name: "Podman".to_string(),
+        installed: podman_installed,
+        running: podman_running,
+        version: podman_version,
+        is_preferred: podman_preferred,
+    });
+
+    // Check Minikube
+    let (minikube_installed, minikube_running, minikube_version) = check_runtime(
+        "minikube", &["version", "--short"], &["status"]
+    );
+    runtimes.push(ContainerRuntimeStatus {
+        name: "Minikube".to_string(),
+        installed: minikube_installed,
+        running: minikube_running,
+        version: minikube_version,
+        is_preferred: false, // Minikube is for Kubernetes, not Docker-compatible
+    });
+
+    // Check nerdctl (containerd CLI)
+    let (nerdctl_installed, nerdctl_running, nerdctl_version) = check_runtime(
+        "nerdctl", &["--version"], &["ps"]
+    );
+    let nerdctl_preferred = nerdctl_running && !found_preferred;
+    if nerdctl_preferred {
+        found_preferred = true;
+    }
+    runtimes.push(ContainerRuntimeStatus {
+        name: "nerdctl".to_string(),
+        installed: nerdctl_installed,
+        running: nerdctl_running,
+        version: nerdctl_version,
+        is_preferred: nerdctl_preferred,
+    });
+
+    // Check Colima (macOS/Linux Docker alternative)
+    let (colima_installed, colima_running, colima_version) = check_runtime(
+        "colima", &["version"], &["status"]
+    );
+    runtimes.push(ContainerRuntimeStatus {
+        name: "Colima".to_string(),
+        installed: colima_installed,
+        running: colima_running,
+        version: colima_version,
+        is_preferred: false,
+    });
+
+    // If no preferred runtime found, mark first running one as preferred
+    if !found_preferred {
+        for runtime in &mut runtimes {
+            if runtime.running {
+                runtime.is_preferred = true;
+                break;
+            }
+        }
+    }
+
+    Ok(runtimes)
 }
 
 // Configuration Management Commands
@@ -422,6 +582,8 @@ pub fn run() {
             get_cloud_status,
             check_docker_status,
             check_podman_status,
+            check_minikube_status,
+            detect_all_runtimes,
             load_template,
             list_templates,
             save_config,
