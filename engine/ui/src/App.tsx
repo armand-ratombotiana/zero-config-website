@@ -1,6 +1,7 @@
 import { BrowserRouter, Routes, Route } from 'react-router-dom';
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { invoke } from '@tauri-apps/api/core';
+import { open } from '@tauri-apps/plugin-dialog';
 import { Sidebar } from './components/layout/Sidebar';
 import { Header } from './components/layout/Header';
 import { Dashboard } from './pages/Dashboard';
@@ -16,27 +17,86 @@ import { useToast } from './hooks/useToast';
 import { Service, ServiceStatus } from './types';
 import './styles.css';
 
+// Welcome screen for when no project is loaded
+function WelcomeScreen({ onNewProject, onOpenProject }: { onNewProject: () => void; onOpenProject: () => void }) {
+  return (
+    <div className="flex-1 flex items-center justify-center p-8">
+      <div className="text-center max-w-2xl">
+        <div className="mx-auto mb-8 flex h-24 w-24 items-center justify-center rounded-2xl bg-gradient-accent shadow-accent-lg">
+          <svg className="h-12 w-12 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M13 10V3L4 14h7v7l9-11h-7z" />
+          </svg>
+        </div>
+        <h1 className="text-4xl font-bold gradient-text mb-4">Welcome to ZeroConfig</h1>
+        <p className="text-lg text-muted mb-8">
+          Zero-configuration development environments. Create or open a project to get started.
+        </p>
+        <div className="flex flex-col sm:flex-row gap-4 justify-center">
+          <button
+            onClick={onNewProject}
+            className="btn btn-primary text-lg px-8 py-4"
+          >
+            <svg className="h-5 w-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+            </svg>
+            Create New Project
+          </button>
+          <button
+            onClick={onOpenProject}
+            className="btn btn-secondary text-lg px-8 py-4"
+          >
+            <svg className="h-5 w-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
+            </svg>
+            Open Existing Project
+          </button>
+        </div>
+        <div className="mt-12 grid grid-cols-1 sm:grid-cols-3 gap-6">
+          <div className="glass-card p-6">
+            <div className="w-12 h-12 rounded-lg bg-success/20 flex items-center justify-center mb-4 mx-auto">
+              <svg className="h-6 w-6 text-success" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+              </svg>
+            </div>
+            <h3 className="text-white font-semibold mb-2">Zero Setup</h3>
+            <p className="text-sm text-muted">Auto-detect languages, databases, and services</p>
+          </div>
+          <div className="glass-card p-6">
+            <div className="w-12 h-12 rounded-lg bg-accent-purple/20 flex items-center justify-center mb-4 mx-auto">
+              <svg className="h-6 w-6 text-accent-purple" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
+              </svg>
+            </div>
+            <h3 className="text-white font-semibold mb-2">Docker/Podman</h3>
+            <p className="text-sm text-muted">Works with your preferred container runtime</p>
+          </div>
+          <div className="glass-card p-6">
+            <div className="w-12 h-12 rounded-lg bg-warning/20 flex items-center justify-center mb-4 mx-auto">
+              <svg className="h-6 w-6 text-warning" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 15a4 4 0 004 4h9a5 5 0 10-.1-9.999 5.002 5.002 0 10-9.78 2.096A4.001 4.001 0 003 15z" />
+              </svg>
+            </div>
+            <h3 className="text-white font-semibold mb-2">Cloud Emulators</h3>
+            <p className="text-sm text-muted">Local AWS, GCP, and Azure emulation</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function App() {
   const [projectPath, setProjectPath] = useState<string>('');
+  const [projectName, setProjectName] = useState<string>('');
   const [services, setServices] = useState<Service[]>([]);
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
-  const [_loading, setLoading] = useState(false);
-  const [_error, setError] = useState<string | null>(null);
+  const [isLoading, setIsLoading] = useState(false);
   const toast = useToast();
 
-  // Load services on mount
-  useEffect(() => {
-    // Set default project path - TODO: make this configurable
-    const defaultPath = 'C:/Users/judic/OneDrive/Desktop/zero-config/test-project';
-    setProjectPath(defaultPath);
-    loadServices(defaultPath);
-  }, []);
-
-  const loadServices = async (path: string) => {
+  const loadServices = useCallback(async (path: string) => {
     if (!path) return;
 
-    setLoading(true);
-    setError(null);
+    setIsLoading(true);
 
     try {
       const output = await invoke<string>('list_services', { projectPath: path });
@@ -65,9 +125,9 @@ function App() {
 
           parsedServices.push({
             name: serviceName,
-            image: `${serviceName}:latest`, // Default, will be updated when we parse config
+            image: `${serviceName}:latest`,
             status,
-            port: undefined, // Will be populated from config
+            port: undefined,
             config: {
               image: `${serviceName}:latest`,
               port: { internal: 0, external: 0 },
@@ -77,49 +137,82 @@ function App() {
       }
 
       setServices(parsedServices);
-
-      if (parsedServices.length === 0) {
-        toast.info('No services running. Start services from the Services page.');
-      }
-
       console.log('Services loaded:', parsedServices);
     } catch (err) {
       console.error('Failed to load services:', err);
       const errorMsg = String(err);
-      setError(errorMsg);
 
-      // Check if it's a "no zero.yml" error
-      if (errorMsg.includes('zero.yml') || errorMsg.includes('No such file')) {
-        toast.error('No zero.yml found in project directory. Please create a project first.');
-      } else if (errorMsg.includes('Docker') || errorMsg.includes('not running')) {
-        toast.error('Docker is not running. Please start Docker and try again.');
-      } else {
-        toast.error(`Failed to load services: ${errorMsg}`);
+      // Don't show error toast for fresh projects with no services
+      if (!errorMsg.includes('zero.yml') && !errorMsg.includes('No such file')) {
+        if (errorMsg.includes('Docker') || errorMsg.includes('not running')) {
+          toast.warning('Container runtime not running. Start Docker or Podman to manage services.');
+        }
       }
 
       setServices([]);
     } finally {
-      setLoading(false);
+      setIsLoading(false);
     }
-  };
+  }, [toast]);
+
+  // Try to load last project on mount
+  useEffect(() => {
+    const lastProject = localStorage.getItem('zeroconfig_last_project');
+    if (lastProject) {
+      setProjectPath(lastProject);
+      setProjectName(lastProject.split(/[\\/]/).pop() || lastProject);
+      loadServices(lastProject);
+    }
+  }, [loadServices]);
 
   const handleRefresh = async () => {
     await loadServices(projectPath);
   };
 
   const handleOpenProject = async () => {
-    // TODO: Call Tauri dialog to select project directory
-    console.log('Open project dialog');
+    try {
+      const selected = await open({
+        directory: true,
+        multiple: false,
+        title: 'Open ZeroConfig Project',
+      });
+
+      if (selected && typeof selected === 'string') {
+        setProjectPath(selected);
+        setProjectName(selected.split(/[\\/]/).pop() || selected);
+        localStorage.setItem('zeroconfig_last_project', selected);
+        toast.success(`Opened project: ${selected.split(/[\\/]/).pop()}`);
+        await loadServices(selected);
+      }
+    } catch (err) {
+      toast.error('Failed to open project directory');
+      console.error(err);
+    }
   };
 
   const handleNewProject = () => {
     setIsCreateModalOpen(true);
   };
 
-  const handleProjectCreated = () => {
-    // Refresh services list after project creation
-    handleRefresh();
+  const handleProjectCreated = (newProjectPath?: string) => {
+    if (newProjectPath) {
+      setProjectPath(newProjectPath);
+      setProjectName(newProjectPath.split(/[\\/]/).pop() || newProjectPath);
+      localStorage.setItem('zeroconfig_last_project', newProjectPath);
+      loadServices(newProjectPath);
+    }
+    setIsCreateModalOpen(false);
   };
+
+  const handleCloseProject = () => {
+    setProjectPath('');
+    setProjectName('');
+    setServices([]);
+    localStorage.removeItem('zeroconfig_last_project');
+  };
+
+  // Show welcome screen if no project is loaded
+  const showWelcome = !projectPath;
 
   return (
     <BrowserRouter>
@@ -128,52 +221,61 @@ function App() {
         <div className="flex flex-1 flex-col overflow-hidden">
           <Header
             projectPath={projectPath}
+            projectName={projectName}
             onRefresh={handleRefresh}
             onOpenProject={handleOpenProject}
             onNewProject={handleNewProject}
+            onCloseProject={projectPath ? handleCloseProject : undefined}
+            isLoading={isLoading}
           />
-          <main className="flex-1 overflow-y-auto p-6">
-            <Routes>
-              <Route
-                path="/"
-                element={
-                  <Dashboard
-                    services={services}
-                    cloudEmulators={1}
-                    projectPath={projectPath}
-                    onRefresh={handleRefresh}
-                    onError={toast.error}
-                    onSuccess={toast.success}
+          <main className="flex-1 overflow-y-auto">
+            {showWelcome ? (
+              <WelcomeScreen onNewProject={handleNewProject} onOpenProject={handleOpenProject} />
+            ) : (
+              <div className="p-6">
+                <Routes>
+                  <Route
+                    path="/"
+                    element={
+                      <Dashboard
+                        services={services}
+                        cloudEmulators={0}
+                        projectPath={projectPath}
+                        onRefresh={handleRefresh}
+                        onError={toast.error}
+                        onSuccess={toast.success}
+                      />
+                    }
                   />
-                }
-              />
-              <Route
-                path="/services"
-                element={
-                  <Services
-                    services={services}
-                    projectPath={projectPath}
-                    onRefresh={handleRefresh}
-                    onError={toast.error}
-                    onSuccess={toast.success}
+                  <Route
+                    path="/services"
+                    element={
+                      <Services
+                        services={services}
+                        projectPath={projectPath}
+                        onRefresh={handleRefresh}
+                        onError={toast.error}
+                        onSuccess={toast.success}
+                      />
+                    }
                   />
-                }
-              />
-              <Route
-                path="/cloud"
-                element={
-                  <CloudEmulators
-                    projectPath={projectPath}
-                    onError={toast.error}
-                    onSuccess={toast.success}
+                  <Route
+                    path="/cloud"
+                    element={
+                      <CloudEmulators
+                        projectPath={projectPath}
+                        onError={toast.error}
+                        onSuccess={toast.success}
+                      />
+                    }
                   />
-                }
-              />
-              <Route path="/monitoring" element={<Monitoring services={services} />} />
-              <Route path="/logs" element={<Logs services={services} />} />
-              <Route path="/config" element={<Configuration />} />
-              <Route path="/settings" element={<Settings />} />
-            </Routes>
+                  <Route path="/monitoring" element={<Monitoring services={services} />} />
+                  <Route path="/logs" element={<Logs services={services} />} />
+                  <Route path="/config" element={<Configuration />} />
+                  <Route path="/settings" element={<Settings />} />
+                </Routes>
+              </div>
+            )}
           </main>
         </div>
 
