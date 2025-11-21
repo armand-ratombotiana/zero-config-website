@@ -194,6 +194,87 @@ impl Default for EnvManager {
     }
 }
 
+/// Credential storage for persisting generated secrets
+pub struct CredentialStore {
+    project_path: std::path::PathBuf,
+    credentials: HashMap<String, String>,
+}
+
+impl CredentialStore {
+    /// Create a new credential store for a project
+    pub fn new(project_path: std::path::PathBuf) -> Self {
+        Self {
+            project_path,
+            credentials: HashMap::new(),
+        }
+    }
+
+    /// Load credentials from .env file
+    pub fn load(&mut self) -> anyhow::Result<()> {
+        let env_file = self.project_path.join(".zeroconfig.env");
+        
+        if !env_file.exists() {
+            return Ok(());
+        }
+
+        let content = std::fs::read_to_string(&env_file)?;
+        
+        for line in content.lines() {
+            let line = line.trim();
+            if line.is_empty() || line.starts_with('#') {
+                continue;
+            }
+            
+            if let Some((key, value)) = line.split_once('=') {
+                self.credentials.insert(key.to_string(), value.to_string());
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Save credentials to .env file
+    pub fn save(&self) -> anyhow::Result<()> {
+        let env_file = self.project_path.join(".zeroconfig.env");
+        
+        let mut content = String::from("# ZeroConfig Generated Credentials\n");
+        content.push_str("# DO NOT COMMIT THIS FILE TO VERSION CONTROL\n\n");
+        
+        for (key, value) in &self.credentials {
+            content.push_str(&format!("{}={}\n", key, value));
+        }
+
+        std::fs::write(&env_file, content)?;
+        Ok(())
+    }
+
+    /// Get or generate a credential
+    pub fn get_or_generate(&mut self, key: &str, generator: impl FnOnce() -> String) -> String {
+        if let Some(value) = self.credentials.get(key) {
+            value.clone()
+        } else {
+            let value = generator();
+            self.credentials.insert(key.to_string(), value.clone());
+            value
+        }
+    }
+
+    /// Get a credential
+    pub fn get(&self, key: &str) -> Option<&String> {
+        self.credentials.get(key)
+    }
+
+    /// Set a credential
+    pub fn set(&mut self, key: String, value: String) {
+        self.credentials.insert(key, value);
+    }
+
+    /// Get all credentials
+    pub fn get_all(&self) -> &HashMap<String, String> {
+        &self.credentials
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

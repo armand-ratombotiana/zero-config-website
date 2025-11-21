@@ -18,6 +18,7 @@ pub struct ContainerOrchestrator {
     docker: Docker,
     project_name: String,
     network_name: String,
+    credential_store: std::sync::Arc<tokio::sync::Mutex<crate::secrets::CredentialStore>>,
 }
 
 impl ContainerOrchestrator {
@@ -32,10 +33,16 @@ impl ContainerOrchestrator {
 
         let network_name = format!("zeroconfig_{}", project_name);
 
+        // Initialize credential store
+        let project_path = std::env::current_dir()?;
+        let mut credential_store = crate::secrets::CredentialStore::new(project_path);
+        let _ = credential_store.load(); // Load existing credentials if available
+
         Ok(Self {
             docker,
             project_name,
             network_name,
+            credential_store: std::sync::Arc::new(tokio::sync::Mutex::new(credential_store)),
         })
     }
 
@@ -151,8 +158,10 @@ impl ContainerOrchestrator {
             ..Default::default()
         };
 
-        // Remove existing container if present
-        let _ = self.remove_container(&container_name).await;
+        // Remove existing container if present (log errors but don't fail)
+        if let Err(e) = self.remove_container(&container_name).await {
+            warn!("Failed toremove existing container {}: {}", container_name, e);
+        }
 
         // Create container
         let options = CreateContainerOptions {
@@ -267,28 +276,74 @@ impl ContainerOrchestrator {
         }
     }
 
-    /// Get service-specific environment variables
+    /// Get service-specific environment variables with generated secrets
     fn get_service_env_vars(&self, service_name: &str) -> Vec<String> {
-        match service_name {
-            "postgres" => vec![
-                "POSTGRES_PASSWORD=zeroconfig".to_string(),
-                "POSTGRES_USER=zeroconfig".to_string(),
-                "POSTGRES_DB=zeroconfig".to_string(),
-            ],
-            "mysql" => vec![
-                "MYSQL_ROOT_PASSWORD=zeroconfig".to_string(),
-                "MYSQL_DATABASE=zeroconfig".to_string(),
-            ],
-            "mongodb" | "mongo" => vec![
-                "MONGO_INITDB_ROOT_USERNAME=zeroconfig".to_string(),
-                "MONGO_INITDB_ROOT_PASSWORD=zeroconfig".to_string(),
-            ],
-            "rabbitmq" => vec![
-                "RABBITMQ_DEFAULT_USER=zeroconfig".to_string(),
-                "RABBITMQ_DEFAULT_PASS=zeroconfig".to_string(),
-            ],
-            _ => vec![],
-        }
+        use crate::secrets::SecretGenerator;
+
+        // Use credential store to persist passwords across restarts
+        let credential_store = self.credential_store.clone();
+        let service_name_owned = service_name.to_string();
+        
+        // Block on async operation (we're in a sync context)
+        let runtime = tokio::runtime::Handle::current();
+        let env_vars = runtime.block_on(async move {
+            let mut store = credential_store.lock().await;
+            
+            match service_name_owned.as_str() {
+                "postgres" => {
+                    let password = store.get_or_generate(
+                        &format!("{}_POSTGRES_PASSWORD", service_name_owned),
+                        || SecretGenerator::generate_db_password()
+                    );
+                    let _ = store.save(); // Save credentials to file
+                    info!("Using persisted password for postgres service");
+                    vec![
+                        format!("POSTGRES_PASSWORD={}", password),
+                        "POSTGRES_USER=zeroconfig".to_string(),
+                        "POSTGRES_DB=zeroconfig".to_string(),
+                    ]
+                }
+                "mysql" => {
+                    let password = store.get_or_generate(
+                        &format!("{}_MYSQL_ROOT_PASSWORD", service_name_owned),
+                        || SecretGenerator::generate_db_password()
+                    );
+                    let _ = store.save();
+                    info!("Using persisted password for mysql service");
+                    vec![
+                        format!("MYSQL_ROOT_PASSWORD={}", password),
+                        "MYSQL_DATABASE=zeroconfig".to_string(),
+                    ]
+                }
+                "mongodb" | "mongo" => {
+                    let password = store.get_or_generate(
+                        &format!("{}_MONGO_INITDB_ROOT_PASSWORD", service_name_owned),
+                        || SecretGenerator::generate_db_password()
+                    );
+                    let _ = store.save();
+                    info!("Using persisted password for mongodb service");
+                    vec![
+                        "MONGO_INITDB_ROOT_USERNAME=zeroconfig".to_string(),
+                        format!("MONGO_INITDB_ROOT_PASSWORD={}", password),
+                    ]
+                }
+                "rabbitmq" => {
+                    let password = store.get_or_generate(
+                        &format!("{}_RABBITMQ_DEFAULT_PASS", service_name_owned),
+                        || SecretGenerator::generate_db_password()
+                    );
+                    let _ = store.save();
+                    info!("Using persisted password for rabbitmq service");
+                    vec![
+                        "RABBITMQ_DEFAULT_USER=zeroconfig".to_string(),
+                        format!("RABBITMQ_DEFAULT_PASS={}", password),
+                    ]
+                }
+                _ => vec![],
+            }
+        });
+        
+        env_vars
     }
 
     /// Stop all project containers
@@ -380,6 +435,38 @@ impl ContainerOrchestrator {
         }
 
         Ok(())
+    }
+
+    /// Execute a command in a service container and return the output as a String
+    pub async fn exec_command_with_output(&self, service_name: &str, command: Vec<String>) -> Result<String> {
+        let container_id = self.get_container_id(service_name).await?;
+
+        let exec_config = CreateExecOptions {
+            attach_stdout: Some(true),
+            attach_stderr: Some(true),
+            cmd: Some(command.iter().map(|s| s.as_str()).collect()),
+            ..Default::default()
+        };
+
+        let exec = self.docker.create_exec(&container_id, exec_config).await?;
+
+        let mut output_string = String::new();
+
+        if let StartExecResults::Attached { mut output, .. } = self.docker.start_exec(&exec.id, None).await? {
+            while let Some(chunk) = output.next().await {
+                match chunk {
+                    Ok(output) => {
+                        output_string.push_str(&output.to_string());
+                    }
+                    Err(e) => {
+                        error!("Error executing command: {}", e);
+                        break;
+                    }
+                }
+            }
+        }
+
+        Ok(output_string)
     }
 
     /// Open an interactive shell in a service container
