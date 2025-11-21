@@ -1,4 +1,4 @@
-use anyhow::{Context, Result};
+use anyhow::Result;
 
 /// Input validation utilities for ZeroConfig
 pub struct InputValidator;

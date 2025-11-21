@@ -1,6 +1,6 @@
 use anyhow::Result;
 use bollard::models::ContainerSummary;
-use tracing::{info, warn};
+use tracing::info;
 
 use crate::config::ZeroConfig;
 use crate::orchestrator::ContainerOrchestrator;
@@ -63,6 +63,39 @@ impl Engine {
         Ok(())
     }
 
+    pub async fn start_service(&mut self, service_name: &str) -> Result<()> {
+        info!("Starting service: {}", service_name);
+
+        // Find the service config
+        let service_config = self
+            .config
+            .get_services()
+            .into_iter()
+            .find(|(name, _)| name == service_name)
+            .map(|(_, config)| config)
+            .ok_or_else(|| anyhow::anyhow!("Service '{}' not found in configuration", service_name))?;
+
+        // Get allocated port or use default
+        let port = self.allocated_ports.get(service_name).copied().unwrap_or_else(|| {
+            // Allocate port if not already allocated
+            let port = 5000 + self.allocated_ports.len() as u16;
+            port
+        });
+
+        self.orchestrator
+            .start_service(service_name, &service_config, port)
+            .await?;
+
+        info!("Service '{}' started on port {}", service_name, port);
+        Ok(())
+    }
+
+    pub async fn stop_service(&self, service_name: &str) -> Result<()> {
+        info!("Stopping service: {}", service_name);
+        self.orchestrator.stop_service(service_name).await?;
+        Ok(())
+    }
+
     pub async fn list_services(&self) -> Result<Vec<ContainerSummary>> {
         self.orchestrator.list_containers().await
     }
@@ -73,6 +106,10 @@ impl Engine {
 
     pub async fn exec_command(&self, service: &str, command: Vec<String>) -> Result<()> {
         self.orchestrator.exec_command(service, command).await
+    }
+
+    pub async fn exec_command_with_output(&self, service: &str, command: Vec<String>) -> Result<String> {
+        self.orchestrator.exec_command_with_output(service, command).await
     }
 
     pub async fn open_shell(&self, service: &str, shell: &str) -> Result<()> {

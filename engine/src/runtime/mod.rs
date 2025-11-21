@@ -6,7 +6,7 @@ pub mod detector;
 pub mod version_manager;
 pub mod container_runtime;
 
-pub use container_runtime::{ContainerRuntime, ContainerRuntimeManager, RuntimeStatus};
+pub use container_runtime::ContainerRuntimeManager;
 
 /// Runtime information for a programming language/tool
 #[derive(Debug, Clone)]

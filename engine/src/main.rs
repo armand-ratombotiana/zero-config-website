@@ -15,6 +15,7 @@ use cli::{Cli, Commands, CloudCommands, GenerateCommands};
 use colored::Colorize;
 use config::ZeroConfig;
 use core::Engine;
+use tracing::{info, warn};
 use tracing_subscriber;
 
 #[tokio::main]
@@ -171,7 +172,7 @@ async fn cmd_up(build: bool, detach: bool) -> Result<()> {
     Ok(())
 }
 
-async fn cmd_down(volumes: bool) -> Result<()> {
+async fn cmd_down(_volumes: bool) -> Result<()> {
     println!("{}", "🛑 Stopping development environment...".yellow().bold());
 
     let config = match ZeroConfig::discover()? {
@@ -866,7 +867,6 @@ async fn cmd_backup(service: String, output: String) -> Result<()> {
     std::fs::create_dir_all(&output)?;
 
     let timestamp = chrono::Local::now().format("%Y%m%d_%H%M%S");
-    let backup_file = format!("{}/{}_{}.sql", output, service, timestamp);
 
     // Execute backup command based on service type
     let (backup_command, file_extension) = if service.contains("postgres") {

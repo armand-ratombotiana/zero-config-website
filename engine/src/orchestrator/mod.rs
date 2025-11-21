@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use bollard::Docker;
-use bollard::container::{Config, CreateContainerOptions, StartContainerOptions, StopContainerOptions, LogsOptions, AttachContainerOptions};
+use bollard::container::{Config, CreateContainerOptions, StartContainerOptions, StopContainerOptions, LogsOptions};
 use bollard::exec::{CreateExecOptions, StartExecResults};
 use bollard::image::CreateImageOptions;
 use bollard::models::{ContainerSummary, HostConfig, PortBinding};
@@ -11,7 +11,7 @@ use tracing::{info, warn, error};
 pub mod docker_client;
 pub mod service_templates;
 
-use crate::config::{ServiceConfig, ZeroConfig};
+use crate::config::ServiceConfig;
 
 /// Container orchestrator that manages Docker containers for services
 pub struct ContainerOrchestrator {

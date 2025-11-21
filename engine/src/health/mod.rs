@@ -3,7 +3,7 @@ use bollard::Docker;
 use bollard::exec::{CreateExecOptions, StartExecResults};
 use futures::StreamExt;
 use std::time::{Duration, Instant};
-use tracing::{info, warn};
+use tracing::info;
 
 #[derive(Debug, Clone)]
 pub struct HealthStatus {
