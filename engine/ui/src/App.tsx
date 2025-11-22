@@ -1,9 +1,11 @@
-import { BrowserRouter, Routes, Route, useLocation } from 'react-router-dom';
+import { BrowserRouter, Routes, Route, useNavigate } from 'react-router-dom';
 import { useState, useEffect, useCallback } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { open } from '@tauri-apps/plugin-dialog';
 import { Sidebar } from './components/layout/Sidebar';
 import { Header } from './components/layout/Header';
+import { CommandPalette } from './components/common/CommandPalette';
+import { NotificationCenter, Notification } from './components/notifications/NotificationCenter';
 import { Dashboard } from './pages/Dashboard';
 import { Services } from './pages/Services';
 import { CloudEmulators } from './pages/CloudEmulators';
@@ -16,6 +18,7 @@ import { ToastContainer } from './components/notifications/ToastNotification';
 import { Breadcrumbs } from './components/navigation/Breadcrumbs';
 import { ProjectList, addRecentProject } from './components/projects/ProjectList';
 import { useToast } from './hooks/useToast';
+import { useKeyboardShortcuts, GLOBAL_SHORTCUTS } from './hooks/useKeyboardShortcuts';
 import { Service, ServiceStatus } from './types';
 import './styles.css';
 
@@ -103,75 +106,83 @@ function WelcomeScreen({
   );
 }
 
-function App() {
+function AppLayout() {
   const [projectPath, setProjectPath] = useState<string>('');
   const [projectName, setProjectName] = useState<string>('');
   const [services, setServices] = useState<Service[]>([]);
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
-  const toast = useToast();
 
-  const loadServices = useCallback(async (path: string) => {
+  // Notification State
+  const [isNotificationCenterOpen, setIsNotificationCenterOpen] = useState(false);
+  const [notifications, setNotifications] = useState<Notification[]>([]);
+
+  const toast = useToast();
+  const navigate = useNavigate();
+
+  // Add notification helper
+  const addNotification = useCallback((title: string, message: string, type: 'success' | 'error' | 'warning' | 'info') => {
+    const newNotification: Notification = {
+      id: Math.random().toString(36).substr(2, 9),
+      title,
+      message,
+      type,
+      timestamp: new Date(),
+      read: false
+    };
+    setNotifications(prev => [newNotification, ...prev]);
+
+    // Also show toast
+    if (type === 'error') toast.error(message);
+    else if (type === 'success') toast.success(message);
+    else if (type === 'warning') toast.warning(message);
+    else toast.info(message);
+  }, [toast]);
+
+  const loadServices = useCallback(async (path: string, silent = false) => {
     if (!path) return;
 
-    setIsLoading(true);
+    if (!silent) setIsLoading(true);
 
     try {
-      const output = await invoke<string>('list_services', { projectPath: path });
+      const services = await invoke<Service[]>('list_services', { projectPath: path });
 
-      // Parse CLI output (format from `ps` command: "  /container_name - status")
-      const lines = output.trim().split('\n').filter(line => line.trim());
-      const parsedServices: Service[] = [];
+      // Map backend service info to frontend Service type if needed
+      // The backend returns ServiceInfo which matches Service interface mostly
+      // Backend: { name, image, status, port, stats }
+      // Frontend Service: { name, image, status, port, config, stats, healthStatus }
 
-      for (const line of lines) {
-        // Skip header lines and empty lines
-        if (line.includes('Running services:') || line.includes('No services')) {
-          continue;
-        }
+      const mappedServices: Service[] = services.map(s => ({
+        ...s,
+        config: {
+          image: s.image,
+          port: { internal: 0, external: s.port || 0 },
+        },
+        // Ensure status is mapped correctly if needed
+        status: s.status as ServiceStatus,
+      }));
 
-        // Parse line format: "  /zeroconfig-project_postgres - Up 2 minutes"
-        if (line.includes(' - ')) {
-          const [namepart, statusPart] = line.split(' - ').map(s => s.trim());
-
-          // Extract service name (remove leading slash and project prefix)
-          const fullName = namepart.replace(/^\//, '');
-          const serviceName = fullName.split('_').pop() || fullName;
-
-          // Determine status from CLI output
-          const isRunning = statusPart.toLowerCase().includes('up');
-          const status = isRunning ? ServiceStatus.Running : ServiceStatus.Stopped;
-
-          parsedServices.push({
-            name: serviceName,
-            image: `${serviceName}:latest`,
-            status,
-            port: undefined,
-            config: {
-              image: `${serviceName}:latest`,
-              port: { internal: 0, external: 0 },
-            },
-          });
-        }
-      }
-
-      setServices(parsedServices);
-      console.log('Services loaded:', parsedServices);
+      setServices(mappedServices);
     } catch (err) {
       console.error('Failed to load services:', err);
       const errorMsg = String(err);
 
       // Don't show error toast for fresh projects with no services
       if (!errorMsg.includes('zero.yml') && !errorMsg.includes('No such file')) {
-        if (errorMsg.includes('Docker') || errorMsg.includes('not running')) {
-          toast.warning('Container runtime not running. Start Docker or Podman to manage services.');
+        if (!silent) {
+          if (errorMsg.includes('Docker') || errorMsg.includes('not running')) {
+            addNotification('Runtime Error', 'Container runtime not running. Start Docker or Podman to manage services.', 'warning');
+          } else {
+            addNotification('Error', `Failed to load services: ${errorMsg}`, 'error');
+          }
         }
       }
 
       setServices([]);
     } finally {
-      setIsLoading(false);
+      if (!silent) setIsLoading(false);
     }
-  }, [toast]);
+  }, [addNotification]);
 
   // Try to load last project on mount
   useEffect(() => {
@@ -183,8 +194,20 @@ function App() {
     }
   }, [loadServices]);
 
+  // Background polling
+  useEffect(() => {
+    if (!projectPath) return;
+
+    const interval = setInterval(() => {
+      loadServices(projectPath, true);
+    }, 5000);
+
+    return () => clearInterval(interval);
+  }, [projectPath, loadServices]);
+
   const handleRefresh = async () => {
     await loadServices(projectPath);
+    addNotification('Refreshed', 'Service list refreshed successfully', 'success');
   };
 
   const handleOpenProject = async () => {
@@ -199,7 +222,7 @@ function App() {
         selectProject(selected);
       }
     } catch (err) {
-      toast.error('Failed to open project directory');
+      addNotification('Error', 'Failed to open project directory', 'error');
       console.error(err);
     }
   };
@@ -210,7 +233,7 @@ function App() {
     setProjectName(name);
     localStorage.setItem('zeroconfig_last_project', path);
     addRecentProject({ path, name });
-    toast.success(`Opened project: ${name}`);
+    addNotification('Project Opened', `Opened project: ${name}`, 'success');
     await loadServices(path);
   };
 
@@ -226,6 +249,7 @@ function App() {
       localStorage.setItem('zeroconfig_last_project', newProjectPath);
       addRecentProject({ path: newProjectPath, name });
       loadServices(newProjectPath);
+      addNotification('Project Created', `Created project: ${name}`, 'success');
     }
     setIsCreateModalOpen(false);
   };
@@ -235,99 +259,194 @@ function App() {
     setProjectName('');
     setServices([]);
     localStorage.removeItem('zeroconfig_last_project');
+    addNotification('Project Closed', 'Project closed successfully', 'info');
   };
+
+  // Notification Handlers
+  const handleToggleNotifications = () => setIsNotificationCenterOpen(prev => !prev);
+  const handleMarkAsRead = (id: string) => {
+    setNotifications(prev => prev.map(n => n.id === id ? { ...n, read: true } : n));
+  };
+  const handleClearNotifications = () => setNotifications([]);
+  const handleRemoveNotification = (id: string) => {
+    setNotifications(prev => prev.filter(n => n.id !== id));
+  };
+
+  // Keyboard Shortcuts
+  useKeyboardShortcuts([
+    {
+      id: 'settings',
+      combo: GLOBAL_SHORTCUTS.SETTINGS,
+      handler: () => navigate('/settings'),
+      description: 'Go to Settings'
+    },
+    {
+      id: 'refresh',
+      combo: GLOBAL_SHORTCUTS.REFRESH,
+      handler: (e) => {
+        e.preventDefault();
+        handleRefresh();
+      },
+      description: 'Refresh Data'
+    },
+    {
+      id: 'nav-dashboard',
+      combo: { key: '1', meta: true, ctrl: true },
+      handler: () => navigate('/'),
+      description: 'Go to Dashboard'
+    },
+    {
+      id: 'nav-services',
+      combo: { key: '2', meta: true, ctrl: true },
+      handler: () => navigate('/services'),
+      description: 'Go to Services'
+    },
+    {
+      id: 'nav-cloud',
+      combo: { key: '3', meta: true, ctrl: true },
+      handler: () => navigate('/cloud'),
+      description: 'Go to Cloud Emulators'
+    },
+    {
+      id: 'nav-monitoring',
+      combo: { key: '4', meta: true, ctrl: true },
+      handler: () => navigate('/monitoring'),
+      description: 'Go to Monitoring'
+    },
+    {
+      id: 'nav-logs',
+      combo: { key: '5', meta: true, ctrl: true },
+      handler: () => navigate('/logs'),
+      description: 'Go to Logs'
+    },
+    {
+      id: 'nav-config',
+      combo: { key: '6', meta: true, ctrl: true },
+      handler: () => navigate('/config'),
+      description: 'Go to Configuration'
+    },
+    {
+      id: 'nav-settings-num',
+      combo: { key: '7', meta: true, ctrl: true },
+      handler: () => navigate('/settings'),
+      description: 'Go to Settings'
+    }
+  ]);
 
   // Show welcome screen if no project is loaded
   const showWelcome = !projectPath;
   const runningServicesCount = services.filter(s => s.status === ServiceStatus.Running).length;
+  const unreadNotificationsCount = notifications.filter(n => !n.read).length;
 
   return (
-    <BrowserRouter>
-      <div className="flex h-screen bg-gradient-primary">
-        <Sidebar
-          projectName={projectName}
+    <div className="flex h-screen bg-gradient-primary">
+      <Sidebar
+        projectName={projectName}
+        projectPath={projectPath}
+        onSelectProject={selectProject}
+        onNewProject={handleNewProject}
+        onOpenProject={handleOpenProject}
+        servicesCount={services.length}
+        runningServicesCount={runningServicesCount}
+      />
+      <div className="flex flex-1 flex-col overflow-hidden">
+        <Header
           projectPath={projectPath}
-          onSelectProject={selectProject}
-          onNewProject={handleNewProject}
+          projectName={projectName}
+          onRefresh={handleRefresh}
           onOpenProject={handleOpenProject}
-          servicesCount={services.length}
-          runningServicesCount={runningServicesCount}
+          onNewProject={handleNewProject}
+          onCloseProject={projectPath ? handleCloseProject : undefined}
+          isLoading={isLoading}
+          onToggleNotifications={handleToggleNotifications}
+          notificationCount={unreadNotificationsCount}
         />
-        <div className="flex flex-1 flex-col overflow-hidden">
-          <Header
-            projectPath={projectPath}
-            projectName={projectName}
-            onRefresh={handleRefresh}
-            onOpenProject={handleOpenProject}
-            onNewProject={handleNewProject}
-            onCloseProject={projectPath ? handleCloseProject : undefined}
-            isLoading={isLoading}
-          />
-          <main className="flex-1 overflow-y-auto">
-            {showWelcome ? (
-              <WelcomeScreen
-                onNewProject={handleNewProject}
-                onOpenProject={handleOpenProject}
-                onSelectProject={selectProject}
-              />
-            ) : (
-              <div className="p-6">
-                <Breadcrumbs projectName={projectName} />
-                <Routes>
-                  <Route
-                    path="/"
-                    element={
-                      <Dashboard
-                        services={services}
-                        cloudEmulators={0}
-                        projectPath={projectPath}
-                        onRefresh={handleRefresh}
-                        onError={toast.error}
-                        onSuccess={toast.success}
-                      />
-                    }
-                  />
-                  <Route
-                    path="/services"
-                    element={
-                      <Services
-                        services={services}
-                        projectPath={projectPath}
-                        onRefresh={handleRefresh}
-                        onError={toast.error}
-                        onSuccess={toast.success}
-                      />
-                    }
-                  />
-                  <Route
-                    path="/cloud"
-                    element={
-                      <CloudEmulators
-                        projectPath={projectPath}
-                        onError={toast.error}
-                        onSuccess={toast.success}
-                      />
-                    }
-                  />
-                  <Route path="/monitoring" element={<Monitoring services={services} />} />
-                  <Route path="/logs" element={<Logs services={services} projectPath={projectPath} />} />
-                  <Route path="/config" element={<Configuration projectPath={projectPath} />} />
-                  <Route path="/settings" element={<Settings />} />
-                </Routes>
-              </div>
-            )}
-          </main>
-        </div>
-
-        <CreateProjectModal
-          isOpen={isCreateModalOpen}
-          onClose={() => setIsCreateModalOpen(false)}
-          onSuccess={handleProjectCreated}
-        />
-
-        <ToastContainer toasts={toast.toasts} onClose={toast.removeToast} />
+        <main className="flex-1 overflow-y-auto">
+          {showWelcome ? (
+            <WelcomeScreen
+              onNewProject={handleNewProject}
+              onOpenProject={handleOpenProject}
+              onSelectProject={selectProject}
+            />
+          ) : (
+            <div className="p-6">
+              <Breadcrumbs projectName={projectName} />
+              <Routes>
+                <Route
+                  path="/"
+                  element={
+                    <Dashboard
+                      services={services}
+                      cloudEmulators={0}
+                      projectPath={projectPath}
+                      onRefresh={handleRefresh}
+                      onError={(msg) => addNotification('Error', msg, 'error')}
+                      onSuccess={(msg) => addNotification('Success', msg, 'success')}
+                      notifications={notifications}
+                    />
+                  }
+                />
+                <Route
+                  path="/services"
+                  element={
+                    <Services
+                      services={services}
+                      projectPath={projectPath}
+                      onRefresh={handleRefresh}
+                      onError={(msg) => addNotification('Error', msg, 'error')}
+                      onSuccess={(msg) => addNotification('Success', msg, 'success')}
+                    />
+                  }
+                />
+                <Route
+                  path="/cloud"
+                  element={
+                    <CloudEmulators
+                      projectPath={projectPath}
+                      onError={(msg) => addNotification('Error', msg, 'error')}
+                      onSuccess={(msg) => addNotification('Success', msg, 'success')}
+                    />
+                  }
+                />
+                <Route path="/monitoring" element={<Monitoring services={services} />} />
+                <Route path="/logs" element={<Logs services={services} projectPath={projectPath} />} />
+                <Route path="/config" element={<Configuration projectPath={projectPath} />} />
+                <Route path="/settings" element={<Settings />} />
+              </Routes>
+            </div>
+          )}
+        </main>
       </div>
-    </BrowserRouter>
+
+      <CreateProjectModal
+        isOpen={isCreateModalOpen}
+        onClose={() => setIsCreateModalOpen(false)}
+        onSuccess={handleProjectCreated}
+      />
+
+      <ToastContainer toasts={toast.toasts} onClose={toast.removeToast} />
+      <CommandPalette />
+      <NotificationCenter
+        isOpen={isNotificationCenterOpen}
+        onClose={() => setIsNotificationCenterOpen(false)}
+        notifications={notifications}
+        onMarkAsRead={handleMarkAsRead}
+        onClearAll={handleClearNotifications}
+        onRemove={handleRemoveNotification}
+      />
+    </div>
+  );
+}
+
+import { ThemeProvider } from './context/ThemeContext';
+
+function App() {
+  return (
+    <ThemeProvider>
+      <BrowserRouter>
+        <AppLayout />
+      </BrowserRouter>
+    </ThemeProvider>
   );
 }
 

@@ -1,5 +1,8 @@
-import { Bell, RefreshCw, FolderOpen, Plus, X, Loader2 } from 'lucide-react';
-import { useState } from 'react';
+import { Search, Bell, Settings, User, Sun, Moon, ChevronDown } from 'lucide-react';
+import { getCurrentWindow } from '@tauri-apps/api/window';
+import { useState, useEffect } from 'react';
+import clsx from 'clsx';
+import { useTheme } from '../../context/ThemeContext';
 
 interface HeaderProps {
   projectPath?: string;
@@ -9,100 +12,74 @@ interface HeaderProps {
   onNewProject?: () => void;
   onCloseProject?: () => void;
   isLoading?: boolean;
+  onToggleNotifications?: () => void;
+  notificationCount?: number;
 }
 
 export function Header({
-  projectPath,
-  projectName,
-  onRefresh,
-  onOpenProject,
-  onNewProject,
-  onCloseProject,
-  isLoading = false,
+  onToggleNotifications,
+  notificationCount = 0
 }: HeaderProps) {
-  const [isRefreshing, setIsRefreshing] = useState(false);
+  const [isMaximized, setIsMaximized] = useState(false);
+  const [isSearchFocused, setIsSearchFocused] = useState(false);
+  const { theme, setTheme } = useTheme();
 
-  const handleRefresh = async () => {
-    setIsRefreshing(true);
-    await onRefresh?.();
-    setTimeout(() => setIsRefreshing(false), 1000);
+  // ... (useEffect)
+
+  const toggleTheme = () => {
+    setTheme(theme === 'dark' ? 'light' : 'dark');
   };
 
+  // ... (window controls)
+
   return (
-    <header className="flex h-16 items-center justify-between border-b border-white/10 glass px-6">
-      <div className="flex items-center space-x-4">
-        {projectPath ? (
-          <>
-            <div className="flex items-center space-x-2">
-              <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-accent/20">
-                <FolderOpen className="h-4 w-4 text-accent" aria-hidden="true" />
-              </div>
-              <div>
-                <h2 className="text-sm font-semibold text-white">
-                  {projectName || projectPath.split(/[\\/]/).pop()}
-                </h2>
-                <p className="text-xs text-muted truncate max-w-xs" title={projectPath}>
-                  {projectPath}
-                </p>
-              </div>
-            </div>
-            {onCloseProject && (
-              <button
-                onClick={onCloseProject}
-                className="p-1.5 rounded-md text-muted hover:text-white hover:bg-white/10 transition-colors"
-                aria-label="Close project"
-                title="Close project"
-              >
-                <X className="h-4 w-4" />
-              </button>
-            )}
-          </>
-        ) : (
-          <h2 className="text-lg font-semibold text-muted">No Project Loaded</h2>
-        )}
-      </div>
+    <header
+      className="flex h-14 items-center justify-between bg-slate-900/50 backdrop-blur-xl border-b border-white/10 px-4 transition-all duration-300"
+      data-tauri-drag-region
+    >
+      {/* ... (Left Section) */}
 
-      <div className="flex items-center space-x-2">
+      {/* ... (Center Section) */}
+
+      {/* Right Section: Actions & Profile */}
+      <div className="flex items-center justify-end gap-2 w-1/3">
         <button
-          onClick={onNewProject}
-          className="btn btn-primary flex items-center space-x-2"
-          aria-label="Create new project"
+          onClick={toggleTheme}
+          className="p-2 rounded-lg text-gray-400 hover:text-white hover:bg-white/10 transition-all hover-scale"
+          aria-label="Toggle theme"
         >
-          <Plus className="h-4 w-4" aria-hidden="true" />
-          <span className="hidden sm:inline">New Project</span>
+          {theme === 'dark' ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
         </button>
 
         <button
-          onClick={onOpenProject}
-          className="btn btn-secondary flex items-center space-x-2"
-          aria-label="Open existing project"
-        >
-          <FolderOpen className="h-4 w-4" aria-hidden="true" />
-          <span className="hidden sm:inline">Open</span>
-        </button>
-
-        {projectPath && (
-          <button
-            onClick={handleRefresh}
-            className="btn btn-ghost flex items-center space-x-2"
-            disabled={isRefreshing || isLoading}
-            aria-label="Refresh services"
-          >
-            {isRefreshing || isLoading ? (
-              <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
-            ) : (
-              <RefreshCw className="h-4 w-4" aria-hidden="true" />
-            )}
-            <span className="hidden sm:inline">Refresh</span>
-          </button>
-        )}
-
-        <button
-          className="relative rounded-lg p-2 text-muted hover:bg-white/5 hover:text-white transition-colors"
+          onClick={onToggleNotifications}
+          className="p-2 rounded-lg text-gray-400 hover:text-white hover:bg-white/10 transition-all hover-scale relative"
           aria-label="Notifications"
         >
-          <Bell className="h-5 w-5" aria-hidden="true" />
-          <span className="absolute right-1.5 top-1.5 h-2 w-2 rounded-full bg-danger" aria-hidden="true"></span>
+          <Bell className="w-4 h-4" />
+          {notificationCount > 0 && (
+            <span className="absolute top-2 right-2 w-2 h-2 bg-red-500 rounded-full border-2 border-slate-900 animate-pulse" />
+          )}
+        </button>
+
+        <button
+          className="p-2 rounded-lg text-gray-400 hover:text-white hover:bg-white/10 transition-all hover-scale"
+          aria-label="Settings"
+        >
+          <Settings className="w-4 h-4" />
+        </button>
+
+        <div className="h-6 w-px bg-white/10 mx-2" />
+
+        <button
+          className="flex items-center gap-2 p-1 pr-3 rounded-full bg-white/5 hover:bg-white/10 border border-white/5 hover:border-white/10 transition-all group"
+          aria-label="User profile"
+        >
+          <div className="w-6 h-6 rounded-full bg-gradient-to-tr from-blue-500 to-purple-500 flex items-center justify-center text-xs font-bold text-white shadow-lg group-hover:scale-105 transition-transform">
+            ZC
+          </div>
+          <span className="text-xs font-medium text-gray-300 group-hover:text-white">Admin</span>
+          <ChevronDown className="w-3 h-3 text-gray-500 group-hover:text-white transition-colors" />
         </button>
       </div>
     </header>

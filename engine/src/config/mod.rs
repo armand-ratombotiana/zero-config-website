@@ -172,8 +172,12 @@ impl ZeroConfig {
     pub fn discover() -> Result<Option<Self>> {
         let current_dir = std::env::current_dir()
             .context("Failed to get current directory")?;
+        Self::discover_in(current_dir)
+    }
 
-        let mut dir = current_dir.as_path();
+    /// Find zero.yml in specified directory or parent directories
+    pub fn discover_in<P: AsRef<Path>>(path: P) -> Result<Option<Self>> {
+        let mut dir = path.as_ref();
 
         loop {
             let config_path = dir.join("zero.yml");

@@ -104,6 +104,14 @@ impl Engine {
         self.orchestrator.get_logs(service, follow, tail).await
     }
 
+    pub async fn get_logs_as_string(&self, service: &str, tail: usize) -> Result<String> {
+        self.orchestrator.get_logs_as_string(service, tail).await
+    }
+
+    pub async fn stream_logs(&self, service: &str, tail: usize) -> Result<impl futures::Stream<Item = Result<String>>> {
+        self.orchestrator.stream_logs(service, tail).await
+    }
+
     pub async fn exec_command(&self, service: &str, command: Vec<String>) -> Result<()> {
         self.orchestrator.exec_command(service, command).await
     }

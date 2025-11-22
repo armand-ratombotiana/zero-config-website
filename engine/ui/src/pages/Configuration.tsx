@@ -1,5 +1,5 @@
-import { useState, useEffect, useCallback } from 'react';
-import { FileText, Download, Upload, Check, AlertCircle, Code, Eye, Wand2, Split, History, Save, RefreshCw } from 'lucide-react';
+import { useState, useEffect } from 'react';
+import { FileText, Download, Upload, Check, AlertCircle, Code, Eye, Wand2, History, Save, RefreshCw, Box, Cloud } from 'lucide-react';
 import { tauriApi } from '../services/tauri';
 import { AVAILABLE_TEMPLATES } from '../types';
 import Editor from '@monaco-editor/react';
@@ -21,7 +21,7 @@ interface ConfigHistory {
 }
 
 export function Configuration({ projectPath = '' }: ConfigurationProps) {
-  const [activeTab, setActiveTab] = useState<'templates' | 'editor' | 'visual'>('templates');
+  const [activeTab, setActiveTab] = useState<'templates' | 'editor' | 'visual' | 'generators'>('templates');
   const [selectedTemplate, setSelectedTemplate] = useState<string>('');
   const [configContent, setConfigContent] = useState<string>('');
   const [isValidating, setIsValidating] = useState(false);
@@ -234,6 +234,12 @@ export function Configuration({ projectPath = '' }: ConfigurationProps) {
           icon={<Wand2 className="h-4 w-4" />}
           label="Visual Builder"
         />
+        <TabButton
+          active={activeTab === 'generators'}
+          onClick={() => setActiveTab('generators')}
+          icon={<Download className="h-4 w-4" />}
+          label="Generators"
+        />
       </div>
 
       {/* Content */}
@@ -251,8 +257,13 @@ export function Configuration({ projectPath = '' }: ConfigurationProps) {
             <VisualBuilderView config={parsedConfig} onChange={handleVisualChange} />
           </div>
         )}
+        {activeTab === 'generators' && (
+          <div className="h-full overflow-y-auto pr-2">
+            <GeneratorsView projectPath={projectPath} />
+          </div>
+        )}
       </div>
-    </div>
+    </div >
   );
 }
 
@@ -267,6 +278,112 @@ function TabButton({ active, onClick, icon, label }: { active: boolean; onClick:
     >
       {icon}
       <span>{label}</span>
+    </button>
+  );
+}
+
+// Generators View Component
+function GeneratorsView({ projectPath }: { projectPath: string }) {
+  const [generating, setGenerating] = useState<string | null>(null);
+  const [message, setMessage] = useState<{ type: 'success' | 'error', text: string } | null>(null);
+
+  const handleGenerate = async (type: string, action: () => Promise<string>) => {
+    if (!projectPath) return;
+    setGenerating(type);
+    setMessage(null);
+    try {
+      const result = await action();
+      setMessage({ type: 'success', text: result });
+    } catch (error) {
+      setMessage({ type: 'error', text: String(error) });
+    } finally {
+      setGenerating(null);
+    }
+  };
+
+  return (
+    <div className="space-y-6 pb-6">
+      <div>
+        <h2 className="text-xl font-semibold text-white mb-2">Configuration Generators</h2>
+        <p className="text-muted">Generate standard configuration files from your zero.yml</p>
+      </div>
+
+      {message && (
+        <div className={clsx(
+          "p-4 rounded-lg flex items-center gap-3",
+          message.type === 'success' ? "bg-success/10 text-success" : "bg-error/10 text-error"
+        )}>
+          {message.type === 'success' ? <Check className="w-5 h-5" /> : <AlertCircle className="w-5 h-5" />}
+          <span>{message.text}</span>
+        </div>
+      )}
+
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <GeneratorCard
+          title="Dockerfile"
+          description="Generate a multi-stage Dockerfile for your services."
+          icon={<FileText className="w-6 h-6 text-blue-400" />}
+          loading={generating === 'dockerfile'}
+          onClick={() => handleGenerate('dockerfile', () => tauriApi.generateDockerfile(projectPath))}
+        />
+        <GeneratorCard
+          title="Docker Compose"
+          description="Generate a docker-compose.yml for local development."
+          icon={<Box className="w-6 h-6 text-blue-500" />}
+          loading={generating === 'compose'}
+          onClick={() => handleGenerate('compose', () => tauriApi.generateCompose(projectPath))}
+        />
+        <GeneratorCard
+          title="Environment File"
+          description="Generate a .env file with secure defaults."
+          icon={<Eye className="w-6 h-6 text-yellow-400" />}
+          loading={generating === 'env'}
+          onClick={() => handleGenerate('env', () => tauriApi.generateEnvFile(projectPath))}
+        />
+        <GeneratorCard
+          title="GitHub Actions"
+          description="Generate a CI/CD workflow for GitHub Actions."
+          icon={<Cloud className="w-6 h-6 text-purple-400" />}
+          loading={generating === 'github'}
+          onClick={() => handleGenerate('github', () => tauriApi.generateGithubActions(projectPath))}
+        />
+      </div>
+
+      <div className="glass-card p-6 border-t border-white/10 mt-8">
+        <div className="flex items-center justify-between">
+          <div>
+            <h3 className="text-lg font-semibold text-white">Generate All</h3>
+            <p className="text-muted text-sm">Generate all configuration files at once.</p>
+          </div>
+          <button
+            onClick={() => handleGenerate('all', () => tauriApi.generateAllConfigs(projectPath))}
+            disabled={generating !== null}
+            className="btn btn-primary flex items-center gap-2"
+          >
+            {generating === 'all' ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Wand2 className="w-4 h-4" />}
+            Generate All
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function GeneratorCard({ title, description, icon, loading, onClick }: any) {
+  return (
+    <button
+      onClick={onClick}
+      disabled={loading}
+      className="glass-card p-6 text-left hover:bg-white/5 transition-all hover:scale-[1.02] group"
+    >
+      <div className="flex items-start justify-between mb-4">
+        <div className="p-3 rounded-lg bg-white/5 group-hover:bg-white/10 transition-colors">
+          {icon}
+        </div>
+        {loading && <RefreshCw className="w-5 h-5 animate-spin text-accent" />}
+      </div>
+      <h3 className="text-lg font-semibold text-white mb-1">{title}</h3>
+      <p className="text-sm text-muted">{description}</p>
     </button>
   );
 }

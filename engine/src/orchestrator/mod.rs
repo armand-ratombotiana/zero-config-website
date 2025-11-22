@@ -409,6 +409,53 @@ impl ContainerOrchestrator {
         Ok(())
     }
 
+    /// Get logs as a string
+    pub async fn get_logs_as_string(&self, service_name: &str, tail: usize) -> Result<String> {
+        let container_id = self.get_container_id(service_name).await?;
+
+        let options = LogsOptions::<String> {
+            follow: false,
+            stdout: true,
+            stderr: true,
+            tail: tail.to_string(),
+            ..Default::default()
+        };
+
+        let mut stream = self.docker.logs(&container_id, Some(options));
+        let mut output_string = String::new();
+
+        while let Some(log) = stream.next().await {
+            match log {
+                Ok(output) => output_string.push_str(&output.to_string()),
+                Err(e) => error!("Error reading logs: {}", e),
+            }
+        }
+
+        Ok(output_string)
+    }
+
+    /// Stream logs from a service container
+    pub async fn stream_logs(&self, service_name: &str, tail: usize) -> Result<impl futures::Stream<Item = Result<String>>> {
+        let container_id = self.get_container_id(service_name).await?;
+
+        let options = LogsOptions::<String> {
+            follow: true,
+            stdout: true,
+            stderr: true,
+            tail: tail.to_string(),
+            ..Default::default()
+        };
+
+        let stream = self.docker.logs(&container_id, Some(options));
+        
+        Ok(stream.map(|res| {
+            match res {
+                Ok(output) => Ok(output.to_string()),
+                Err(e) => Err(anyhow::anyhow!("Docker log error: {}", e))
+            }
+        }))
+    }
+
     /// Execute a command in a service container
     pub async fn exec_command(&self, service_name: &str, command: Vec<String>) -> Result<()> {
         let container_id = self.get_container_id(service_name).await?;

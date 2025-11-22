@@ -1,8 +1,7 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { Search, Download, Trash2, Play, Pause, Pin, PinOff, Copy, Check, FileText, BarChart2, Filter, Regex } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
-import { FixedSizeList as List } from 'react-window';
-import AutoSizer from 'react-virtualized-auto-sizer';
+import { listen } from '@tauri-apps/api/event';
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 import { Service } from '../types';
 import clsx from 'clsx';
@@ -32,8 +31,7 @@ export function Logs({ services, projectPath = '' }: LogsProps) {
   const [showAnalytics, setShowAnalytics] = useState(false);
   const [copiedId, setCopiedId] = useState<string | null>(null);
 
-  const listRef = useRef<List>(null);
-  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const logsEndRef = useRef<HTMLDivElement>(null);
 
   // Parse log line into structured format
   const parseLogLine = (line: string, serviceName: string): LogEntry | null => {
@@ -61,7 +59,32 @@ export function Logs({ services, projectPath = '' }: LogsProps) {
     };
   };
 
-  // Fetch logs
+  const togglePin = (logId: string) => {
+    setPinnedLogs(prev => {
+      const newSet = new Set(prev);
+      if (newSet.has(logId)) {
+        newSet.delete(logId);
+      } else {
+        newSet.add(logId);
+      }
+      return newSet;
+    });
+    setLogs(prev => prev.map(log =>
+      log.id === logId ? { ...log, pinned: !log.pinned } : log
+    ));
+  };
+
+  const copyToClipboard = async (text: string, logId: string) => {
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopiedId(logId);
+      setTimeout(() => setCopiedId(null), 2000);
+    } catch (err) {
+      console.error('Failed to copy:', err);
+    }
+  };
+
+  // Fetch logs (historical)
   const fetchAllLogs = useCallback(async () => {
     if (!projectPath || services.length === 0) return;
 
@@ -92,20 +115,69 @@ export function Logs({ services, projectPath = '' }: LogsProps) {
       allLogs.sort((a, b) => a.timestamp.localeCompare(b.timestamp));
       setLogs(allLogs);
     } catch {
-      // Silently ignore errors during polling
+      // Silently ignore errors
     }
   }, [projectPath, services, selectedService]);
 
-  // Initial load and polling
+  // Real-time streaming
   useEffect(() => {
-    fetchAllLogs();
-    if (autoScroll && projectPath) {
-      intervalRef.current = setInterval(fetchAllLogs, 5000);
-    }
-    return () => {
-      if (intervalRef.current) clearInterval(intervalRef.current);
+    if (!projectPath || services.length === 0) return;
+
+    let unlisten: (() => void) | undefined;
+    const activeStreams = new Set<string>();
+
+    const setupStreams = async () => {
+      // Setup listener
+      unlisten = await listen<{ service: string; line: string }>('log-event', (event) => {
+        const { service, line } = event.payload;
+
+        // Filter if we only want specific service logs
+        if (selectedService !== 'all' && service !== selectedService) return;
+
+        const parsed = parseLogLine(line, service);
+        if (parsed) {
+          setLogs(prev => {
+            const newLogs = [...prev, parsed];
+            // Keep last 5000 logs to prevent memory issues
+            if (newLogs.length > 5000) {
+              return newLogs.slice(newLogs.length - 5000);
+            }
+            return newLogs;
+          });
+        }
+      });
+
+      // Start streams
+      const servicesToStream = selectedService === 'all'
+        ? services.map(s => s.name)
+        : [selectedService];
+
+      for (const service of servicesToStream) {
+        try {
+          await invoke('start_log_stream', {
+            projectPath,
+            serviceName: service,
+          });
+          activeStreams.add(service);
+        } catch (e) {
+          console.error(`Failed to start stream for ${service}:`, e);
+        }
+      }
     };
-  }, [fetchAllLogs, autoScroll, projectPath]);
+
+    // Initial fetch of historical logs
+    fetchAllLogs().then(() => {
+      setupStreams();
+    });
+
+    return () => {
+      if (unlisten) unlisten();
+      // Stop all active streams
+      activeStreams.forEach(service => {
+        invoke('stop_log_stream', { serviceName: service }).catch(console.error);
+      });
+    };
+  }, [projectPath, services, selectedService, fetchAllLogs]);
 
   // Filter logs
   const filteredLogs = useMemo(() => {
@@ -135,8 +207,8 @@ export function Logs({ services, projectPath = '' }: LogsProps) {
 
   // Auto-scroll
   useEffect(() => {
-    if (autoScroll && listRef.current && filteredLogs.length > 0) {
-      listRef.current.scrollToItem(filteredLogs.length - 1, 'end');
+    if (autoScroll && logsEndRef.current && filteredLogs.length > 0) {
+      logsEndRef.current.scrollIntoView({ behavior: 'smooth' });
     }
   }, [filteredLogs.length, autoScroll]);
 
@@ -158,21 +230,6 @@ export function Logs({ services, projectPath = '' }: LogsProps) {
       .slice(-20); // Last 20 buckets
   }, [filteredLogs]);
 
-  const handleCopyLog = (log: LogEntry) => {
-    const text = `[${log.timestamp}] [${log.level.toUpperCase()}] [${log.service}] ${log.message}`;
-    navigator.clipboard.writeText(text);
-    setCopiedId(log.id);
-    setTimeout(() => setCopiedId(null), 2000);
-  };
-
-  const togglePin = (id: string) => {
-    setPinnedLogs(prev => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
-  };
 
   const handleDownloadLogs = (format: 'txt' | 'json') => {
     let content = '';
@@ -200,59 +257,8 @@ export function Logs({ services, projectPath = '' }: LogsProps) {
     URL.revokeObjectURL(url);
   };
 
-  const Row = ({ index, style }: { index: number; style: React.CSSProperties }) => {
-    const log = filteredLogs[index];
-    const isPinned = pinnedLogs.has(log.id);
-
-    return (
-      <div style={style} className={clsx(
-        "flex items-start space-x-3 px-4 py-2 hover:bg-white/5 group transition-colors border-b border-white/5",
-        isPinned && "bg-blue-500/10 hover:bg-blue-500/20"
-      )}>
-        <div className="flex items-center gap-2 shrink-0 mt-0.5">
-          <button
-            onClick={() => togglePin(log.id)}
-            className={clsx(
-              "opacity-0 group-hover:opacity-100 transition-opacity",
-              isPinned ? "text-accent opacity-100" : "text-gray-500 hover:text-white"
-            )}
-          >
-            {isPinned ? <PinOff className="w-3.5 h-3.5" /> : <Pin className="w-3.5 h-3.5" />}
-          </button>
-          <button
-            onClick={() => handleCopyLog(log)}
-            className="opacity-0 group-hover:opacity-100 transition-opacity text-gray-500 hover:text-white"
-          >
-            {copiedId === log.id ? <Check className="w-3.5 h-3.5 text-success" /> : <Copy className="w-3.5 h-3.5" />}
-          </button>
-        </div>
-
-        <span className="text-xs text-gray-500 font-mono shrink-0 w-36">{log.timestamp}</span>
-
-        <span className={clsx(
-          "text-xs font-bold uppercase px-1.5 py-0.5 rounded shrink-0 w-16 text-center",
-          log.level === 'error' ? "bg-error/10 text-error" :
-            log.level === 'warn' ? "bg-warning/10 text-warning" :
-              log.level === 'debug' ? "bg-gray-800 text-gray-400" :
-                "bg-blue-500/10 text-blue-400"
-        )}>
-          {log.level}
-        </span>
-
-        <span className="text-xs text-primary-400 font-medium shrink-0 w-32 truncate" title={log.service}>
-          [{log.service}]
-        </span>
-
-        <span className={clsx(
-          "text-sm font-mono break-all",
-          log.level === 'error' ? "text-error-light" :
-            log.level === 'warn' ? "text-warning-light" :
-              "text-gray-300"
-        )}>
-          {log.message}
-        </span>
-      </div>
-    );
+  const handleCopyLog = async (log: LogEntry) => {
+    await copyToClipboard(`[${log.timestamp}] [${log.level.toUpperCase()}] [${log.service}] ${log.message}`, log.id);
   };
 
   return (
@@ -412,20 +418,49 @@ export function Logs({ services, projectPath = '' }: LogsProps) {
             <p>No logs found matching your filters</p>
           </div>
         ) : (
-          <AutoSizer>
-            {({ height, width }) => (
-              <List
-                ref={listRef}
-                height={height}
-                itemCount={filteredLogs.length}
-                itemSize={40} // Fixed row height
-                width={width}
-                className="scrollbar-thin scrollbar-thumb-gray-700 scrollbar-track-transparent"
+          <div className="flex-1 overflow-y-auto space-y-1 scrollbar-thin scrollbar-thumb-gray-700 scrollbar-track-transparent">
+            {filteredLogs.map((log) => (
+              <div
+                key={log.id}
+                className={clsx(
+                  "flex items-start gap-3 p-3 rounded-lg transition-colors",
+                  log.pinned ? "bg-blue-500/10 border border-blue-500/30" : "hover:bg-white/5",
+                  log.level === 'error' && "bg-red-500/5 border-l-2 border-red-500",
+                  log.level === 'warn' && "bg-yellow-500/5 border-l-2 border-yellow-500"
+                )}
               >
-                {Row}
-              </List>
-            )}
-          </AutoSizer>
+                <span className="text-xs text-gray-500 font-mono w-16 shrink-0">{log.timestamp.substring(11, 19)}</span>
+                <span className={clsx(
+                  "text-xs font-medium w-20 shrink-0",
+                  log.level === 'error' && "text-red-400",
+                  log.level === 'warn' && "text-yellow-400",
+                  log.level === 'info' && "text-blue-400",
+                  log.level === 'debug' && "text-gray-400"
+                )}>
+                  {log.level.toUpperCase()}
+                </span>
+                <span className="text-xs text-gray-400 w-24 shrink-0">{log.service}</span>
+                <span className="text-sm text-white flex-1 font-mono break-all">{log.message}</span>
+                <div className="flex gap-1 shrink-0">
+                  <button
+                    onClick={() => togglePin(log.id)}
+                    className="p-1 hover:bg-white/10 rounded transition-colors"
+                    title={log.pinned ? "Unpin" : "Pin"}
+                  >
+                    {log.pinned ? <PinOff className="w-3 h-3 text-blue-400" /> : <Pin className="w-3 h-3 text-gray-400" />}
+                  </button>
+                  <button
+                    onClick={() => copyToClipboard(log.message, log.id)}
+                    className="p-1 hover:bg-white/10 rounded transition-colors"
+                    title="Copy"
+                  >
+                    {copiedId === log.id ? <Check className="w-3 h-3 text-green-400" /> : <Copy className="w-3 h-3 text-gray-400" />}
+                  </button>
+                </div>
+              </div>
+            ))}
+            <div ref={logsEndRef} />
+          </div>
         )}
       </div>
     </div>

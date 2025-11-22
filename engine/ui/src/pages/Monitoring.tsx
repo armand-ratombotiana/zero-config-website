@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { Activity, TrendingUp, TrendingDown, Minus, Pause, Play, Download, Clock, AlertTriangle } from 'lucide-react';
+import { Activity, TrendingUp, TrendingDown, Minus, Pause, Play, Download, Clock, AlertTriangle, Server } from 'lucide-react';
 import { StatsChart } from '../components/monitoring/StatsChart';
 import { Service } from '../types';
 import clsx from 'clsx';
@@ -24,7 +24,7 @@ export function Monitoring({ services }: MonitoringProps) {
   const [showAlerts, setShowAlerts] = useState(true);
 
   // Refs for interval management
-  const intervalRef = useRef<NodeJS.Timeout | null>(null);
+  const intervalRef = useRef<number | null>(null);
 
   // Calculate aggregate metrics
   const calculateMetrics = (): { cpu: MetricSummary; memory: MetricSummary } => {
@@ -330,8 +330,8 @@ export function Monitoring({ services }: MonitoringProps) {
                   <td className="px-6 py-4 whitespace-nowrap">
                     <span
                       className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${service.healthStatus?.isHealthy
-                          ? 'bg-success/10 text-success'
-                          : 'bg-error/10 text-error'
+                        ? 'bg-success/10 text-success'
+                        : 'bg-error/10 text-error'
                         }`}
                     >
                       <div className={`w-1.5 h-1.5 rounded-full mr-1.5 ${service.healthStatus?.isHealthy ? 'bg-success' : 'bg-error'
