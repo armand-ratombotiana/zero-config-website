@@ -43,6 +43,30 @@ ZeroConfig is a developer tool designed to simplify the management of local deve
 
 ## Usage
 
+### CLI Usage
+
+```bash
+# Initialize a new project
+zc init --template fullstack
+
+# Start your development environment
+zc up
+
+# Check system requirements
+zc doctor
+
+# View running services
+zc ps
+
+# View logs
+zc logs postgres
+
+# Stop environment
+zc down
+```
+
+### Desktop UI Usage
+
 1.  **Open a Project**: Launch ZeroConfig and open your project directory.
 2.  **Auto-Detection**: ZeroConfig will scan your project and suggest services.
 3.  **Start Services**: Click "Start All" to spin up your environment.

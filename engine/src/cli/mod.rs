@@ -1,10 +1,10 @@
 use clap::{Parser, Subcommand};
 
 #[derive(Parser)]
-#[command(name = "zero")]
+#[command(name = "zc")]
 #[command(author = "ZeroConfig Team")]
 #[command(version = "0.1.0")]
-#[command(about = "Universal Developer Environment Automation Engine", long_about = None)]
+#[command(about = "ZeroConfig - Universal Developer Environment Automation", long_about = None)]
 pub struct Cli {
     #[command(subcommand)]
     pub command: Commands,
