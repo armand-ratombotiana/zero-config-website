@@ -1,11 +1,9 @@
 import { BrowserRouter, Routes, Route, useNavigate } from 'react-router-dom';
-import { useState, useEffect, useCallback } from 'react';
-import { invoke } from '@tauri-apps/api/core';
-import { open } from '@tauri-apps/plugin-dialog';
+import { useEffect } from 'react';
 import { Sidebar } from './components/layout/Sidebar';
 import { Header } from './components/layout/Header';
 import { CommandPalette } from './components/common/CommandPalette';
-import { NotificationCenter, Notification } from './components/notifications/NotificationCenter';
+import { NotificationCenter } from './components/notifications/NotificationCenter';
 import { Dashboard } from './pages/Dashboard';
 import { Services } from './pages/Services';
 import { CloudEmulators } from './pages/CloudEmulators';
@@ -16,22 +14,40 @@ import { Settings } from './pages/Settings';
 import CreateProjectModal from './components/modals/CreateProjectModal';
 import { ToastContainer } from './components/notifications/ToastNotification';
 import { Breadcrumbs } from './components/navigation/Breadcrumbs';
-import { ProjectList, addRecentProject } from './components/projects/ProjectList';
+import { ProjectList } from './components/projects/ProjectList';
+import { ErrorBoundary } from './components/common/ErrorBoundary';
 import { useToast } from './hooks/useToast';
 import { useKeyboardShortcuts, GLOBAL_SHORTCUTS } from './hooks/useKeyboardShortcuts';
-import { Service, ServiceStatus } from './types';
+import { useProjectStore } from './stores/projectStore';
+import { useNotificationStore } from './stores/notificationStore';
+import { useUIStore } from './stores/uiStore';
+import { ThemeProvider } from './context/ThemeContext';
 import './styles.css';
 
 // Welcome screen for when no project is loaded
-function WelcomeScreen({
-  onNewProject,
-  onOpenProject,
-  onSelectProject
-}: {
-  onNewProject: () => void;
-  onOpenProject: () => void;
-  onSelectProject: (path: string) => void;
-}) {
+function WelcomeScreen() {
+  const { selectProject, openProject } = useProjectStore();
+  const { openCreateModal } = useUIStore();
+  const { addNotification } = useNotificationStore();
+
+  const handleOpenProject = async () => {
+    try {
+      await openProject();
+      addNotification('Project Opened', 'Project opened successfully', 'success');
+    } catch (err) {
+      addNotification('Error', 'Failed to open project directory', 'error');
+      console.error(err);
+    }
+  };
+
+  const handleSelectProject = async (path: string) => {
+    try {
+      await selectProject(path);
+      addNotification('Project Opened', `Opened project: ${path.split(/[\\/]/).pop()}`, 'success');
+    } catch (err) {
+      console.error('Failed to select project:', err);
+    }
+  };
   return (
     <div className="flex-1 flex p-8 gap-8">
       {/* Left: Welcome message and actions */}
@@ -47,7 +63,7 @@ function WelcomeScreen({
         </p>
         <div className="flex flex-col sm:flex-row gap-3">
           <button
-            onClick={onNewProject}
+            onClick={openCreateModal}
             className="btn btn-primary px-6 py-3"
           >
             <svg className="h-5 w-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -56,7 +72,7 @@ function WelcomeScreen({
             Create New Project
           </button>
           <button
-            onClick={onOpenProject}
+            onClick={handleOpenProject}
             className="btn btn-secondary px-6 py-3"
           >
             <svg className="h-5 w-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -100,73 +116,59 @@ function WelcomeScreen({
 
       {/* Right: Recent Projects */}
       <div className="w-96 glass-card p-6">
-        <ProjectList onSelectProject={onSelectProject} />
+        <ProjectList onSelectProject={handleSelectProject} />
       </div>
     </div>
   );
 }
 
 function AppLayout() {
-  const [projectPath, setProjectPath] = useState<string>('');
-  const [projectName, setProjectName] = useState<string>('');
-  const [services, setServices] = useState<Service[]>([]);
-  const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
-  const [isLoading, setIsLoading] = useState(false);
-
-  // Notification State
-  const [isNotificationCenterOpen, setIsNotificationCenterOpen] = useState(false);
-  const [notifications, setNotifications] = useState<Notification[]>([]);
-
-  const toast = useToast();
   const navigate = useNavigate();
+  const toast = useToast();
 
-  // Add notification helper
-  const addNotification = useCallback((title: string, message: string, type: 'success' | 'error' | 'warning' | 'info') => {
-    const newNotification: Notification = {
-      id: Math.random().toString(36).substr(2, 9),
-      title,
-      message,
-      type,
-      timestamp: new Date(),
-      read: false
-    };
-    setNotifications(prev => [newNotification, ...prev]);
+  // Zustand stores
+  const {
+    projectPath,
+    projectName,
+    loadServices,
+    selectProject,
+    refreshServices
+  } = useProjectStore();
 
-    // Also show toast
-    if (type === 'error') toast.error(message);
-    else if (type === 'success') toast.success(message);
-    else if (type === 'warning') toast.warning(message);
-    else toast.info(message);
-  }, [toast]);
+  const {
+    notifications,
+    isNotificationCenterOpen,
+    addNotification,
+    markAsRead,
+    clearAll,
+    removeNotification,
+    setNotificationCenterOpen
+  } = useNotificationStore();
 
-  const loadServices = useCallback(async (path: string, silent = false) => {
-    if (!path) return;
+  const {
+    isCreateModalOpen,
+    closeCreateModal
+  } = useUIStore();
 
-    if (!silent) setIsLoading(true);
+  // Integrate toast with notification store
+  useEffect(() => {
+    if (notifications.length > 0) {
+      const latest = notifications[0];
+      if (!latest.read) {
+        const { type, message } = latest;
+        if (type === 'error') toast.error(message);
+        else if (type === 'success') toast.success(message);
+        else if (type === 'warning') toast.warning(message);
+        else toast.info(message);
+      }
+    }
+  }, [notifications, toast]);
 
+  const handleLoadServices = async (path: string, silent = false) => {
     try {
-      const services = await invoke<Service[]>('list_services', { projectPath: path });
-
-      // Map backend service info to frontend Service type if needed
-      // The backend returns ServiceInfo which matches Service interface mostly
-      // Backend: { name, image, status, port, stats }
-      // Frontend Service: { name, image, status, port, config, stats, healthStatus }
-
-      const mappedServices: Service[] = services.map(s => ({
-        ...s,
-        config: {
-          image: s.image,
-          port: { internal: 0, external: s.port || 0 },
-        },
-        // Ensure status is mapped correctly if needed
-        status: s.status as ServiceStatus,
-      }));
-
-      setServices(mappedServices);
+      await loadServices(path, silent);
     } catch (err) {
-      console.error('Failed to load services:', err);
       const errorMsg = String(err);
-
       // Don't show error toast for fresh projects with no services
       if (!errorMsg.includes('zero.yml') && !errorMsg.includes('No such file')) {
         if (!silent) {
@@ -177,99 +179,47 @@ function AppLayout() {
           }
         }
       }
-
-      setServices([]);
-    } finally {
-      if (!silent) setIsLoading(false);
     }
-  }, [addNotification]);
+  };
 
   // Try to load last project on mount
   useEffect(() => {
     const lastProject = localStorage.getItem('zeroconfig_last_project');
     if (lastProject) {
-      setProjectPath(lastProject);
-      setProjectName(lastProject.split(/[\\/]/).pop() || lastProject);
-      loadServices(lastProject);
+      selectProject(lastProject).catch(err => {
+        console.error('Failed to load last project:', err);
+      });
     }
-  }, [loadServices]);
+  }, []);  // Run only once on mount
 
   // Background polling
   useEffect(() => {
     if (!projectPath) return;
 
     const interval = setInterval(() => {
-      loadServices(projectPath, true);
+      handleLoadServices(projectPath, true);
     }, 5000);
 
     return () => clearInterval(interval);
-  }, [projectPath, loadServices]);
+  }, [projectPath]);
 
   const handleRefresh = async () => {
-    await loadServices(projectPath);
+    await refreshServices();
     addNotification('Refreshed', 'Service list refreshed successfully', 'success');
   };
 
-  const handleOpenProject = async () => {
-    try {
-      const selected = await open({
-        directory: true,
-        multiple: false,
-        title: 'Open ZeroConfig Project',
-      });
 
-      if (selected && typeof selected === 'string') {
-        selectProject(selected);
-      }
-    } catch (err) {
-      addNotification('Error', 'Failed to open project directory', 'error');
-      console.error(err);
-    }
-  };
+  // Handlers for notification actions passed to NotificationCenter
+  const handleMarkAsRead = (id: string) => markAsRead(id);
+  const handleClearNotifications = () => clearAll();
+  const handleRemoveNotification = (id: string) => removeNotification(id);
 
-  const selectProject = async (path: string) => {
-    const name = path.split(/[\\/]/).pop() || path;
-    setProjectPath(path);
-    setProjectName(name);
-    localStorage.setItem('zeroconfig_last_project', path);
-    addRecentProject({ path, name });
-    addNotification('Project Opened', `Opened project: ${name}`, 'success');
-    await loadServices(path);
-  };
-
-  const handleNewProject = () => {
-    setIsCreateModalOpen(true);
-  };
-
-  const handleProjectCreated = (newProjectPath?: string) => {
+  const handleProjectCreated = async (newProjectPath?: string) => {
     if (newProjectPath) {
-      const name = newProjectPath.split(/[\\/]/).pop() || newProjectPath;
-      setProjectPath(newProjectPath);
-      setProjectName(name);
-      localStorage.setItem('zeroconfig_last_project', newProjectPath);
-      addRecentProject({ path: newProjectPath, name });
-      loadServices(newProjectPath);
-      addNotification('Project Created', `Created project: ${name}`, 'success');
+      await selectProject(newProjectPath);
+      addNotification('Project Created', `Created project: ${newProjectPath.split(/[\\/]/).pop()}`, 'success');
     }
-    setIsCreateModalOpen(false);
-  };
-
-  const handleCloseProject = () => {
-    setProjectPath('');
-    setProjectName('');
-    setServices([]);
-    localStorage.removeItem('zeroconfig_last_project');
-    addNotification('Project Closed', 'Project closed successfully', 'info');
-  };
-
-  // Notification Handlers
-  const handleToggleNotifications = () => setIsNotificationCenterOpen(prev => !prev);
-  const handleMarkAsRead = (id: string) => {
-    setNotifications(prev => prev.map(n => n.id === id ? { ...n, read: true } : n));
-  };
-  const handleClearNotifications = () => setNotifications([]);
-  const handleRemoveNotification = (id: string) => {
-    setNotifications(prev => prev.filter(n => n.id !== id));
+    closeCreateModal();
   };
 
   // Keyboard Shortcuts
@@ -335,84 +285,29 @@ function AppLayout() {
 
   // Show welcome screen if no project is loaded
   const showWelcome = !projectPath;
-  const runningServicesCount = services.filter(s => s.status === ServiceStatus.Running).length;
-  const unreadNotificationsCount = notifications.filter(n => !n.read).length;
-
   return (
     <div className="flex h-screen bg-gradient-primary">
-      <Sidebar
-        projectName={projectName}
-        projectPath={projectPath}
-        onSelectProject={selectProject}
-        onNewProject={handleNewProject}
-        onOpenProject={handleOpenProject}
-        servicesCount={services.length}
-        runningServicesCount={runningServicesCount}
-      />
+      <Sidebar />
       <div className="flex flex-1 flex-col overflow-hidden">
-        <Header
-          projectPath={projectPath}
-          projectName={projectName}
-          onRefresh={handleRefresh}
-          onOpenProject={handleOpenProject}
-          onNewProject={handleNewProject}
-          onCloseProject={projectPath ? handleCloseProject : undefined}
-          isLoading={isLoading}
-          onToggleNotifications={handleToggleNotifications}
-          notificationCount={unreadNotificationsCount}
-        />
+        <Header />
         <main className="flex-1 overflow-y-auto">
           {showWelcome ? (
-            <WelcomeScreen
-              onNewProject={handleNewProject}
-              onOpenProject={handleOpenProject}
-              onSelectProject={selectProject}
-            />
+            <WelcomeScreen />
           ) : (
             <div className="p-6">
               <Breadcrumbs projectName={projectName} />
-              <Routes>
-                <Route
-                  path="/"
-                  element={
-                    <Dashboard
-                      services={services}
-                      cloudEmulators={0}
-                      projectPath={projectPath}
-                      onRefresh={handleRefresh}
-                      onError={(msg) => addNotification('Error', msg, 'error')}
-                      onSuccess={(msg) => addNotification('Success', msg, 'success')}
-                      notifications={notifications}
-                    />
-                  }
-                />
-                <Route
-                  path="/services"
-                  element={
-                    <Services
-                      services={services}
-                      projectPath={projectPath}
-                      onRefresh={handleRefresh}
-                      onError={(msg) => addNotification('Error', msg, 'error')}
-                      onSuccess={(msg) => addNotification('Success', msg, 'success')}
-                    />
-                  }
-                />
-                <Route
-                  path="/cloud"
-                  element={
-                    <CloudEmulators
-                      projectPath={projectPath}
-                      onError={(msg) => addNotification('Error', msg, 'error')}
-                      onSuccess={(msg) => addNotification('Success', msg, 'success')}
-                    />
-                  }
-                />
-                <Route path="/monitoring" element={<Monitoring services={services} />} />
-                <Route path="/logs" element={<Logs services={services} projectPath={projectPath} />} />
-                <Route path="/config" element={<Configuration projectPath={projectPath} />} />
-                <Route path="/settings" element={<Settings />} />
-              </Routes>
+              <ErrorBoundary>
+                <Routes>
+                  <Route path="/" element={<Dashboard />}
+                  />
+                  <Route path="/services" element={<Services />} />
+                  <Route path="/cloud" element={<CloudEmulators />} />
+                  <Route path="/monitoring" element={<Monitoring />} />
+                  <Route path="/logs" element={<Logs />} />
+                  <Route path="/config" element={<Configuration />} />
+                  <Route path="/settings" element={<Settings />} />
+                </Routes>
+              </ErrorBoundary>
             </div>
           )}
         </main>
@@ -420,7 +315,7 @@ function AppLayout() {
 
       <CreateProjectModal
         isOpen={isCreateModalOpen}
-        onClose={() => setIsCreateModalOpen(false)}
+        onClose={closeCreateModal}
         onSuccess={handleProjectCreated}
       />
 
@@ -428,7 +323,7 @@ function AppLayout() {
       <CommandPalette />
       <NotificationCenter
         isOpen={isNotificationCenterOpen}
-        onClose={() => setIsNotificationCenterOpen(false)}
+        onClose={() => setNotificationCenterOpen(false)}
         notifications={notifications}
         onMarkAsRead={handleMarkAsRead}
         onClearAll={handleClearNotifications}
@@ -438,7 +333,9 @@ function AppLayout() {
   );
 }
 
-import { ThemeProvider } from './context/ThemeContext';
+
+
+
 
 function App() {
   return (

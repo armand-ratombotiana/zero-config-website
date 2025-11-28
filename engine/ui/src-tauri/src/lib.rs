@@ -1,12 +1,20 @@
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
 use std::collections::HashMap;
 use std::sync::Mutex;
-use tauri::{Emitter, Manager, State};
+use tauri::{Emitter, State};
 use futures::StreamExt;
 use zeroconfig::config::ZeroConfig;
 use zeroconfig::core::Engine;
 use zeroconfig::runtime::ContainerRuntimeManager;
+
+/// Validate shell command to prevent command injection
+fn validate_shell_command(shell: &str) -> Result<(), String> {
+    let allowed_shells = ["sh", "bash", "zsh", "fish", "ash", "dash"];
+    if !allowed_shells.contains(&shell) {
+        return Err(format!("Invalid shell '{}'. Allowed: {:?}", shell, allowed_shells));
+    }
+    Ok(())
+}
 
 struct LogStreamManager {
     handles: Mutex<HashMap<String, tokio::task::AbortHandle>>,
@@ -33,12 +41,20 @@ pub struct ServiceInfo {
 pub struct ServiceStats {
     cpu: f64,
     memory: MemoryStats,
+    network: NetworkStats,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct MemoryStats {
     percentage: f64,
     usage: u64,
+    limit: u64,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct NetworkStats {
+    rx: u64,
+    tx: u64,
 }
 
 /// Helper to get initialized engine
@@ -97,6 +113,11 @@ async fn list_services(project_path: String) -> Result<Vec<ServiceInfo>, String>
     let containers = engine.list_services().await
         .map_err(|e| format!("Failed to list services: {}", e))?;
 
+    // Try to get stats, but don't fail if we can't
+    let stats_map = engine.get_all_stats().await.ok().unwrap_or_default()
+        .into_iter()
+        .collect::<HashMap<_, _>>();
+
     let mut services = Vec::new();
 
     for container in containers {
@@ -106,24 +127,67 @@ async fn list_services(project_path: String) -> Result<Vec<ServiceInfo>, String>
             .unwrap_or("unknown")
             .to_string();
         
-        // Filter by project name (simple heuristic)
-        // The engine already filters by project name in list_containers if we used the orchestrator correctly.
-        // But let's be safe.
-        
         let image = container.image.unwrap_or_default();
         let status = container.status.unwrap_or_default();
         
         // Extract port
         let port = container.ports.as_ref()
             .and_then(|p| p.iter().find(|port| port.public_port.is_some()))
-            .map(|p| p.public_port.unwrap());
+            .map(|p| p.public_port.unwrap_or(0));
+
+        let stats = stats_map.get(&name).map(|stat| {
+             // Calculate CPU percentage
+            let cpu_delta = stat.cpu_stats.cpu_usage.total_usage as f64
+                - stat.precpu_stats.cpu_usage.total_usage as f64;
+            let system_delta = stat.cpu_stats.system_cpu_usage.unwrap_or(0) as f64
+                - stat.precpu_stats.system_cpu_usage.unwrap_or(0) as f64;
+
+            let cpu_percent = if system_delta > 0.0 && cpu_delta > 0.0 {
+                let num_cpus = stat.cpu_stats.online_cpus.unwrap_or(1) as f64;
+                (cpu_delta / system_delta) * num_cpus * 100.0
+            } else {
+                0.0
+            };
+
+            // Calculate Memory percentage
+            let memory_usage = stat.memory_stats.usage.unwrap_or(0);
+            let memory_limit = stat.memory_stats.limit.unwrap_or(0);
+            let memory_percent = if memory_limit > 0 {
+                (memory_usage as f64 / memory_limit as f64) * 100.0
+            } else {
+                0.0
+            };
+
+            // Network I/O
+            let mut rx = 0;
+            let mut tx = 0;
+            if let Some(networks) = &stat.networks {
+                for net in networks.values() {
+                    rx += net.rx_bytes;
+                    tx += net.tx_bytes;
+                }
+            }
+
+            ServiceStats {
+                cpu: cpu_percent,
+                memory: MemoryStats {
+                    percentage: memory_percent,
+                    usage: memory_usage,
+                    limit: memory_limit,
+                },
+                network: NetworkStats {
+                    rx,
+                    tx,
+                },
+            }
+        });
 
         services.push(ServiceInfo {
             name,
             image,
             status,
             port,
-            stats: None, // We could fetch stats here if we wanted
+            stats,
         });
     }
 
@@ -178,7 +242,7 @@ async fn get_service_logs(project_path: String, service_name: String, tail: Opti
 
 // Cloud commands - reuse existing logic or implement similar to above
 #[tauri::command]
-async fn start_cloud_emulator(project_path: String, provider: String) -> Result<String, String> {
+async fn start_cloud_emulator(provider: String) -> Result<String, String> {
     // Cloud emulator logic is in zeroconfig::cloud
     // We can use it directly
     use zeroconfig::cloud::CloudEmulator;
@@ -193,7 +257,7 @@ async fn start_cloud_emulator(project_path: String, provider: String) -> Result<
 }
 
 #[tauri::command]
-async fn stop_cloud_emulator(project_path: String, provider: String) -> Result<String, String> {
+async fn stop_cloud_emulator(provider: String) -> Result<String, String> {
     use zeroconfig::cloud::CloudEmulator;
     
     let emulator = CloudEmulator::new(provider.clone()).await
@@ -206,13 +270,13 @@ async fn stop_cloud_emulator(project_path: String, provider: String) -> Result<S
 }
 
 #[tauri::command]
-async fn get_cloud_status(project_path: String, provider: String) -> Result<String, String> {
+async fn get_cloud_status(provider: String) -> Result<String, String> {
     use zeroconfig::cloud::CloudEmulator;
     
     let emulator = CloudEmulator::new(provider.clone()).await
         .map_err(|e| format!("Failed to create emulator: {}", e))?;
         
-    let status = emulator.status().await
+    let status = emulator.is_running().await
         .map_err(|e| format!("Failed to get status: {}", e))?;
         
     Ok(if status { "Running".to_string() } else { "Stopped".to_string() })
@@ -222,16 +286,6 @@ async fn get_cloud_status(project_path: String, provider: String) -> Result<Stri
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ContainerRuntimeStatus {
     name: String,
-    installed: boolean,
-    running: boolean,
-    version: Option<String>,
-    is_preferred: boolean,
-}
-
-// Use bool instead of boolean (typo fix)
-#[derive(Debug, Serialize, Deserialize)]
-pub struct ContainerRuntimeStatusFixed {
-    name: String,
     installed: bool,
     running: bool,
     version: Option<String>,
@@ -239,39 +293,31 @@ pub struct ContainerRuntimeStatusFixed {
 }
 
 #[tauri::command]
-async fn detect_all_runtimes() -> Result<Vec<ContainerRuntimeStatusFixed>, String> {
+async fn detect_all_runtimes() -> Result<Vec<ContainerRuntimeStatus>, String> {
     let mut manager = ContainerRuntimeManager::new();
     manager.detect_runtimes().await.map_err(|e| e.to_string())?;
     
-    let available = manager.get_available_runtimes();
-    let mut statuses = Vec::new();
-    
-    // We need to manually construct the status list based on what the manager found
-    // The manager doesn't expose a "get_all_statuses" method that returns exactly what we want
-    // So we iterate over known runtimes
-    
     use zeroconfig::runtime::ContainerRuntime;
     
-    let all_runtimes = vec![
-        ContainerRuntime::Docker,
-        ContainerRuntime::Podman,
-        ContainerRuntime::Minikube,
-        ContainerRuntime::Nerdctl,
-        ContainerRuntime::Colima,
-    ];
-    
+    let all_runtimes = ContainerRuntime::all();
     let preferred = manager.get_preferred_runtime().ok();
     
-    for rt in all_runtimes {
-        let status = manager.get_runtime_status(rt).await;
-        statuses.push(ContainerRuntimeStatusFixed {
-            name: rt.name().to_string(),
-            installed: status.installed,
-            running: status.running,
-            version: status.version,
-            is_preferred: preferred == Some(rt),
-        });
-    }
+    // Run checks in parallel
+    let futures = all_runtimes.iter().map(|rt| {
+        let manager_ref = &manager;
+        async move {
+            let status = manager_ref.get_runtime_status(*rt).await;
+            ContainerRuntimeStatus {
+                name: rt.name().to_string(),
+                installed: status.installed,
+                running: status.running,
+                version: status.version,
+                is_preferred: preferred == Some(*rt),
+            }
+        }
+    });
+    
+    let statuses = futures::future::join_all(futures).await;
     
     Ok(statuses)
 }
@@ -279,7 +325,7 @@ async fn detect_all_runtimes() -> Result<Vec<ContainerRuntimeStatusFixed>, Strin
 // Legacy checks for compatibility
 #[tauri::command]
 async fn check_docker_status() -> Result<String, String> {
-    let mut manager = ContainerRuntimeManager::new();
+    let manager = ContainerRuntimeManager::new();
     let status = manager.get_runtime_status(zeroconfig::runtime::ContainerRuntime::Docker).await;
     if status.running {
         Ok(status.version.unwrap_or_default())
@@ -290,7 +336,7 @@ async fn check_docker_status() -> Result<String, String> {
 
 #[tauri::command]
 async fn check_podman_status() -> Result<String, String> {
-    let mut manager = ContainerRuntimeManager::new();
+    let manager = ContainerRuntimeManager::new();
     let status = manager.get_runtime_status(zeroconfig::runtime::ContainerRuntime::Podman).await;
     if status.running {
         Ok(status.version.unwrap_or_default())
@@ -403,10 +449,68 @@ async fn generate_all_configs(project_path: String) -> Result<String, String> {
     Ok("All configs generated".to_string())
 }
 
+#[tauri::command]
+async fn get_services_stats(project_path: String) -> Result<HashMap<String, ServiceStats>, String> {
+    let engine = get_engine(&project_path).await?;
+    let stats = engine.get_all_stats().await
+        .map_err(|e| format!("Failed to get stats: {}", e))?;
+
+    let mut result = HashMap::new();
+
+    for (name, stat) in stats {
+        // Calculate CPU percentage
+        let cpu_delta = stat.cpu_stats.cpu_usage.total_usage as f64
+            - stat.precpu_stats.cpu_usage.total_usage as f64;
+        let system_delta = stat.cpu_stats.system_cpu_usage.unwrap_or(0) as f64
+            - stat.precpu_stats.system_cpu_usage.unwrap_or(0) as f64;
+
+        let cpu_percent = if system_delta > 0.0 && cpu_delta > 0.0 {
+            let num_cpus = stat.cpu_stats.online_cpus.unwrap_or(1) as f64;
+            (cpu_delta / system_delta) * num_cpus * 100.0
+        } else {
+            0.0
+        };
+
+        // Calculate Memory percentage
+        let memory_usage = stat.memory_stats.usage.unwrap_or(0);
+        let memory_limit = stat.memory_stats.limit.unwrap_or(0);
+        let memory_percent = if memory_limit > 0 {
+            (memory_usage as f64 / memory_limit as f64) * 100.0
+        } else {
+            0.0
+        };
+
+        // Network I/O
+        let mut rx = 0;
+        let mut tx = 0;
+        if let Some(networks) = stat.networks {
+            for net in networks.values() {
+                rx += net.rx_bytes;
+                tx += net.tx_bytes;
+            }
+        }
+
+        result.insert(name, ServiceStats {
+            cpu: cpu_percent,
+            memory: MemoryStats {
+                percentage: memory_percent,
+                usage: memory_usage,
+                limit: memory_limit,
+            },
+            network: NetworkStats {
+                rx,
+                tx,
+            },
+        });
+    }
+
+    Ok(result)
+}
+
 // Missing commands: check_minikube_status
 #[tauri::command]
 async fn check_minikube_status() -> Result<String, String> {
-     let mut manager = ContainerRuntimeManager::new();
+     let manager = ContainerRuntimeManager::new();
     let status = manager.get_runtime_status(zeroconfig::runtime::ContainerRuntime::Minikube).await;
     if status.running {
         Ok(status.version.unwrap_or_default())
@@ -423,7 +527,7 @@ async fn start_log_stream(
     service_name: String,
 ) -> Result<(), String> {
     // Stop existing stream if any
-    if let Some(handle) = state.handles.lock().unwrap().remove(&service_name) {
+    if let Some(handle) = state.handles.lock().map_err(|_| "Failed to lock mutex".to_string())?.remove(&service_name) {
         handle.abort();
     }
 
@@ -446,7 +550,7 @@ async fn start_log_stream(
         }
     });
 
-    state.handles.lock().unwrap().insert(service_name, handle.abort_handle());
+    state.handles.lock().map_err(|_| "Failed to lock mutex".to_string())?.insert(service_name, handle.abort_handle());
     Ok(())
 }
 
@@ -455,19 +559,33 @@ async fn stop_log_stream(
     state: State<'_, LogStreamManager>,
     service_name: String,
 ) -> Result<(), String> {
-    if let Some(handle) = state.handles.lock().unwrap().remove(&service_name) {
+    if let Some(handle) = state.handles.lock().map_err(|_| "Failed to lock mutex".to_string())?.remove(&service_name) {
         handle.abort();
     }
     Ok(())
 }
 
 #[tauri::command]
-async fn open_terminal_window(project_path: String, service_name: String, shell: Option<String>) -> Result<(), String> {
-    let engine = get_engine(&project_path).await?;
-    let container_id = engine.orchestrator.get_container_id(&service_name).await
-        .map_err(|e| format!("Failed to get container ID: {}", e))?;
+async fn open_terminal_window(service_name: String, shell: Option<String>) -> Result<(), String> {
+    // Get container ID using docker ps command directly
+    let output = std::process::Command::new("docker")
+        .args(&["ps", "--filter", &format!("name={}", service_name), "--format", "{{.ID}}"])
+        .output()
+        .map_err(|e| format!("Failed to run docker ps: {}", e))?;
+    
+    if !output.status.success() {
+        return Err("Failed to get container ID".to_string());
+    }
+    
+    let container_id = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if container_id.is_empty() {
+        return Err(format!("Container {} not found or not running", service_name));
+    }
     
     let shell_cmd = shell.unwrap_or_else(|| "sh".to_string());
+    
+    // Validate shell command to prevent injection
+    validate_shell_command(&shell_cmd)?;
     
     #[cfg(target_os = "windows")]
     {
@@ -512,76 +630,6 @@ async fn open_terminal_window(project_path: String, service_name: String, shell:
     Ok(())
 }
 
-/// Generate Dockerfile
-#[tauri::command]
-async fn generate_dockerfile(project_path: String) -> Result<String, String> {
-    let config = ZeroConfig::discover_in(&project_path)
-        .map_err(|e| format!("Failed to discover config: {}", e))?
-        .ok_or_else(|| "No zero.yml found".to_string())?;
-    
-    let output_dir = PathBuf::from(&project_path);
-    zeroconfig::generators::dockerfile::generate(&config, &output_dir)
-        .map_err(|e| format!("Failed to generate Dockerfile: {}", e))?;
-    
-    Ok("Dockerfile generated successfully".to_string())
-}
-
-/// Generate docker-compose.yml
-#[tauri::command]
-async fn generate_compose(project_path: String) -> Result<String, String> {
-    let config = ZeroConfig::discover_in(&project_path)
-        .map_err(|e| format!("Failed to discover config: {}", e))?
-        .ok_or_else(|| "No zero.yml found".to_string())?;
-    
-    let output_dir = PathBuf::from(&project_path);
-    zeroconfig::generators::compose::generate(&config, &output_dir)
-        .map_err(|e| format!("Failed to generate docker-compose.yml: {}", e))?;
-    
-    Ok("docker-compose.yml generated successfully".to_string())
-}
-
-/// Generate .env file
-#[tauri::command]
-async fn generate_env_file(project_path: String) -> Result<String, String> {
-    let config = ZeroConfig::discover_in(&project_path)
-        .map_err(|e| format!("Failed to discover config: {}", e))?
-        .ok_or_else(|| "No zero.yml found".to_string())?;
-    
-    let output_dir = PathBuf::from(&project_path);
-    zeroconfig::generators::envfile::generate(&config, &output_dir)
-        .map_err(|e| format!("Failed to generate .env file: {}", e))?;
-    
-    Ok(".env file generated successfully".to_string())
-}
-
-/// Generate GitHub Actions workflow
-#[tauri::command]
-async fn generate_github_actions(project_path: String) -> Result<String, String> {
-    let config = ZeroConfig::discover_in(&project_path)
-        .map_err(|e| format!("Failed to discover config: {}", e))?
-        .ok_or_else(|| "No zero.yml found".to_string())?;
-    
-    let output_dir = PathBuf::from(&project_path);
-    zeroconfig::generators::github_actions::generate(&config, &output_dir)
-        .map_err(|e| format!("Failed to generate GitHub Actions workflow: {}", e))?;
-    
-    Ok("GitHub Actions workflow generated successfully".to_string())
-}
-
-/// Generate all configuration files
-#[tauri::command]
-async fn generate_all_configs(project_path: String) -> Result<String, String> {
-    let config = ZeroConfig::discover_in(&project_path)
-        .map_err(|e| format!("Failed to discover config: {}", e))?
-        .ok_or_else(|| "No zero.yml found".to_string())?;
-    
-    let output_dir = PathBuf::from(&project_path);
-    zeroconfig::generators::generate_all(&config, &output_dir)
-        .map_err(|e| format!("Failed to generate configs: {}", e))?;
-    
-    Ok("All configuration files generated successfully".to_string())
-}
-
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -618,6 +666,7 @@ pub fn run() {
             generate_env_file,
             generate_github_actions,
             generate_all_configs,
+            get_services_stats,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
